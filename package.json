@@ -1,0 +1,17 @@
+
+{
+  "name": "26-attendance-bot",
+  "version": "1.0.0",
+  "description": "26 Group Discord Attendance Bot",
+  "main": "bot.js",
+  "private": true,
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "discord.js": "^14.21.0"
+  }
+}
