@@ -579,7 +579,7 @@ async function sendAttendance(
  * 10. Register /attendance
  *******************************************************/
 
-async function async function registerCommands() {
+async function registerCommands() {
 
   const guild =
     await client.guilds.fetch(
