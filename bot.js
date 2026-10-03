@@ -14,20 +14,23 @@ const http = require('node:http');
 
 
 /*******************************************************
- * 26 GROUP ATTENDANCE BOT V2.3.1 STABLE
+ * 26 GROUP ATTENDANCE BOT V2.3.2 STABLE
  *
- * /attendance 私人考勤面板
+ * FIX:
+ * - /attendance FIRST ACK
+ * - Button FIRST ACK
+ * - Private attendance panel
+ * - Bilingual messages
+ * - Gateway watchdog
  *
- * 班次時間由 Apps Script 控制：
+ * WORK SCHEDULE:
+ * Controlled by Apps Script
+ *
  * LV / LT / MMC = 09:00
  * LU = 13:00
  *
- * 未來鑫晨可設定另一個時間。
- *
- * 離座：
- * Toilet = 15 min
- * Smoke = 7 min
- * Take Away = 10 min
+ * Future:
+ * XINCHEN can use another schedule.
  *******************************************************/
 
 
@@ -52,7 +55,7 @@ if (
 ) {
 
   console.error(
-    '[FATAL] 缺少必要的 Render 環境變數'
+    '[FATAL] Missing required environment variables'
   );
 
   process.exit(1);
@@ -140,7 +143,7 @@ const BUTTONS = {
 
 
 /*******************************************************
- * 5. Client
+ * 5. Discord Client
  *******************************************************/
 
 const client =
@@ -160,9 +163,6 @@ const client =
 
 let discordReady =
   false;
-
-let lastReadyAt =
-  0;
 
 let lastGatewayActivity =
   Date.now();
@@ -200,7 +200,7 @@ http
             '26 Group Attendance',
 
           version:
-            'V2.3.1-STABLE',
+            'V2.3.2-STABLE',
 
           http:
             'ONLINE',
@@ -303,6 +303,7 @@ function getCompany(
 
       return company;
     }
+
   }
 
 
@@ -359,7 +360,7 @@ function createAttendancePanel(
 
       .setFooter({
         text:
-          '26 GROUP ATTENDANCE | V2.3.1'
+          '26 GROUP ATTENDANCE | V2.3.2'
       });
 
 
@@ -508,8 +509,9 @@ async function sendAttendance(
 
 
       throw new Error(
-        'Google API 回應格式錯誤'
+        'Google API response format error'
       );
+
     }
 
 
@@ -583,14 +585,6 @@ async function sendLateNotice(
       return;
     }
 
-
-    /*
-     * 由 Apps Script 回傳各公司的班次。
-     *
-     * LV/LT/MMC = 09:00
-     * LU = 13:00
-     * 鑫晨未來可使用另一時間。
-     */
 
     const workStart =
       result.workStartDisplay ||
@@ -705,7 +699,7 @@ async function sendLateNotice(
       workStart,
       'Late:',
       result.lateMinutes +
-      '分鐘'
+      ' min'
     );
 
 
@@ -942,7 +936,7 @@ async function checkOverdue() {
           item.employee,
           item.awayLabel,
           item.overdueMinutes +
-          '分鐘'
+          ' min'
         );
 
 
@@ -993,9 +987,6 @@ client.once(
     discordReady =
       true;
 
-    lastReadyAt =
-      Date.now();
-
     lastGatewayActivity =
       Date.now();
 
@@ -1032,7 +1023,7 @@ client.once(
 
 
 /*******************************************************
- * 15. Gateway Monitoring
+ * 15. Gateway Events
  *******************************************************/
 
 client.on(
@@ -1042,9 +1033,6 @@ client.on(
 
     discordReady =
       true;
-
-    lastReadyAt =
-      Date.now();
 
     lastGatewayActivity =
       Date.now();
@@ -1162,7 +1150,7 @@ client.on(
 
 
 /*******************************************************
- * 16. Interaction
+ * 16. Interaction Handler
  *******************************************************/
 
 client.on(
@@ -1175,7 +1163,10 @@ client.on(
 
 
     /***************************************************
-     * /attendance
+     * A. /attendance
+     *
+     * IMPORTANT:
+     * FIRST ACK DISCORD
      ***************************************************/
 
     if (
@@ -1185,13 +1176,52 @@ client.on(
     ) {
 
       console.log(
-        '[COMMAND]',
+        '[COMMAND RECEIVED]',
         '/attendance',
         'User:',
         interaction.user.id,
         'Channel:',
-        interaction.channelId
+        interaction.channelId,
+        'Interaction:',
+        interaction.id
       );
+
+
+      /*
+       * FIRST ACK.
+       *
+       * Do this BEFORE:
+       * - getCompany()
+       * - building embed
+       * - any API
+       */
+
+      try {
+
+        await interaction.deferReply({
+
+          flags:
+            MessageFlags.Ephemeral
+
+        });
+
+
+        console.log(
+          '[COMMAND ACK]',
+          interaction.id
+        );
+
+
+      } catch (error) {
+
+        console.error(
+          '[COMMAND ACK FAILED]',
+          interaction.id,
+          error.message
+        );
+
+        return;
+      }
 
 
       try {
@@ -1202,22 +1232,22 @@ client.on(
           );
 
 
-        await interaction.reply({
-
-          ...createAttendancePanel(
+        const panel =
+          createAttendancePanel(
             company
-          ),
+          );
 
-          flags:
-            MessageFlags.Ephemeral
 
-        });
+        await interaction.editReply(
+          panel
+        );
 
 
         console.log(
           '[PANEL OPEN]',
           company,
-          interaction.user.id
+          interaction.user.id,
+          interaction.id
         );
 
 
@@ -1225,46 +1255,35 @@ client.on(
 
         console.error(
           '[COMMAND ERROR]',
+          interaction.id,
           error.message
         );
 
 
-        if (
-          interaction.replied ||
-          interaction.deferred
-        ) {
+        await interaction
+          .editReply({
 
-          await interaction
-            .editReply({
+            content:
 
-              content:
-                '❌ ' +
-                error.message
+              '❌ **Unable to open attendance panel｜無法開啟考勤面板**\n\n' +
+              error.message,
 
-            })
-            .catch(
-              () => {}
-            );
+            embeds: [],
 
+            components: []
 
-        } else {
+          })
+          .catch(
+            error2 => {
 
-          await interaction
-            .reply({
+              console.error(
+                '[COMMAND EDIT ERROR]',
+                interaction.id,
+                error2.message
+              );
 
-              content:
-                '❌ ' +
-                error.message,
-
-              flags:
-                MessageFlags.Ephemeral
-
-            })
-            .catch(
-              () => {}
-            );
-
-        }
+            }
+          );
 
       }
 
@@ -1274,7 +1293,7 @@ client.on(
 
 
     /***************************************************
-     * Attendance Buttons
+     * B. Attendance Buttons
      ***************************************************/
 
     if (
@@ -1330,19 +1349,18 @@ client.on(
     );
 
 
-    /***************************************************
-     * ACK FIRST
-     ***************************************************/
+    /*
+     * BUTTON FIRST ACK
+     */
 
     try {
 
-      await interaction
-        .deferReply({
+      await interaction.deferReply({
 
-          flags:
-            MessageFlags.Ephemeral
+        flags:
+          MessageFlags.Ephemeral
 
-        });
+      });
 
 
       console.log(
@@ -1433,18 +1451,17 @@ client.on(
         !result.ok
       ) {
 
-        await interaction
-          .editReply({
+        await interaction.editReply({
 
-            content:
+          content:
 
-              '⚠️ **Attendance failed｜考勤操作失敗**\n\n' +
-              (
-                result.message ||
-                'Please try again.｜請重新嘗試。'
-              )
+            '⚠️ **Attendance failed｜考勤操作失敗**\n\n' +
+            (
+              result.message ||
+              'Please try again.｜請重新嘗試。'
+            )
 
-          });
+        });
 
 
         return;
@@ -1459,13 +1476,12 @@ client.on(
         result.duplicate
       ) {
 
-        await interaction
-          .editReply({
+        await interaction.editReply({
 
-            content:
-              '⚠️ This action has already been recorded.｜此操作已經記錄過。'
+          content:
+            '⚠️ This action has already been recorded.｜此操作已經記錄過。'
 
-          });
+        });
 
 
         return;
@@ -1477,8 +1493,7 @@ client.on(
        *************************************************/
 
       const englishAction =
-        BUTTONS[action]
-          ?.label ||
+        BUTTONS[action]?.label ||
         action;
 
 
@@ -1541,8 +1556,7 @@ client.on(
 
 
         if (
-          result.overdue ===
-          true
+          result.overdue === true
         ) {
 
           content +=
@@ -1583,8 +1597,7 @@ client.on(
 
 
         if (
-          result.late ===
-          true
+          result.late === true
         ) {
 
           content +=
@@ -1598,13 +1611,12 @@ client.on(
       }
 
 
-      await interaction
-        .editReply({
+      await interaction.editReply({
 
-          content:
-            content
+        content:
+          content
 
-        });
+      });
 
 
       console.log(
@@ -1680,7 +1692,7 @@ client.on(
 
 
 /*******************************************************
- * 17. 每分鐘檢查離座超時
+ * 17. Overdue Monitor
  *******************************************************/
 
 setInterval(
@@ -1778,7 +1790,7 @@ setInterval(
     ) {
 
       console.error(
-        '[FATAL] Discord Gateway 超過 3 分鐘未恢復，重新啟動服務'
+        '[FATAL] Discord Gateway unavailable for more than 3 minutes'
       );
 
 
@@ -1814,7 +1826,7 @@ client.on(
 
 
 /*******************************************************
- * 20. Node Error
+ * 20. Node Errors
  *******************************************************/
 
 process.on(
@@ -1905,7 +1917,7 @@ async function gracefulRestart(
  *******************************************************/
 
 console.log(
-  '[BOOT] 26 GROUP ATTENDANCE V2.3.1 STABLE'
+  '[BOOT] 26 GROUP ATTENDANCE V2.3.2 STABLE'
 );
 
 
