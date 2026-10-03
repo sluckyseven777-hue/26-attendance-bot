@@ -6,26 +6,36 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  MessageFlags
+  MessageFlags,
+  SlashCommandBuilder
 } = require('discord.js');
 
 const http = require('node:http');
 
 
 /*******************************************************
- * 26 GROUP ATTENDANCE BOT V2.2 STABLE
+ * 26 GROUP ATTENDANCE BOT V2.3 STABLE
  *
- * LV / LT / MMC / LU
+ * /attendance 私人考勤面板
  *
- * 上班：09:00
- * 上廁所：15分鐘
- * 抽煙：7分鐘
- * 外賣：10分鐘
+ * 班次時間由 Apps Script 控制：
+ * LV  = 09:00
+ * LT  = 09:00
+ * MMC = 09:00
+ * LU  = 13:00
  *
- * V2.2：
+ * 未來可直接增加：
+ * XINCHEN / SG / IRL 等不同班次
+ *
+ * 離座限制：
+ * Toilet    = 15 min
+ * Smoke     = 7 min
+ * Take Away = 10 min
+ *
+ * 保留 V2.2 STABLE：
  * - Discord Gateway 狀態監控
  * - Gateway 斷線自動恢復
- * - 長時間失聯自動退出，交給 Render 重啟
+ * - 長時間失聯交給 Render 重啟
  * - Interaction 詳細診斷
  * - Apps Script timeout
  * - 超時監控防重疊
@@ -36,25 +46,55 @@ const http = require('node:http');
  * 1. Environment
  *******************************************************/
 
-const TOKEN = process.env.TOKEN;
-const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
-const API_SECRET = process.env.API_SECRET;
+const TOKEN =
+  process.env.TOKEN;
 
-if (!TOKEN || !APPS_SCRIPT_URL || !API_SECRET) {
-  console.error('[FATAL] 缺少必要的 Render 環境變數');
+const APPS_SCRIPT_URL =
+  process.env.APPS_SCRIPT_URL;
+
+const API_SECRET =
+  process.env.API_SECRET;
+
+
+if (
+  !TOKEN ||
+  !APPS_SCRIPT_URL ||
+  !API_SECRET
+) {
+
+  console.error(
+    '[FATAL] 缺少必要的 Render 環境變數'
+  );
+
   process.exit(1);
 }
 
 
 /*******************************************************
- * 2. Channels
+ * 2. Attendance Channels
+ *
+ * 未來鑫晨加入：
+ *
+ * 例如：
+ * XINCHEN: 'CHANNEL_ID'
+ *
+ * Apps Script 再設定對應班次即可。
  *******************************************************/
 
 const CHANNELS = {
-  LV: '1536948264954236998',
-  LT: '1554087224973197323',
-  MMC: '1554087319450030140',
-  LU: '1554087992279433266'
+
+  LV:
+    '1536948264954236998',
+
+  LT:
+    '1554087224973197323',
+
+  MMC:
+    '1554087319450030140',
+
+  LU:
+    '1554087992279433266'
+
 };
 
 
@@ -63,47 +103,49 @@ const CHANNELS = {
  *******************************************************/
 
 const BUTTONS = {
+
   START: {
     id: 'START',
-    label: '上班',
+    label: 'Start Work',
     emoji: '🟢',
     style: ButtonStyle.Success
   },
 
   OFF: {
     id: 'OFF',
-    label: '下班',
+    label: 'Off Work',
     emoji: '🔴',
     style: ButtonStyle.Danger
   },
 
   BACK: {
     id: 'BACK',
-    label: '回座',
+    label: 'Back to Seat',
     emoji: '🪑',
     style: ButtonStyle.Success
   },
 
   TOILET: {
     id: 'TOILET',
-    label: '上廁所',
+    label: 'Toilet',
     emoji: '🚻',
     style: ButtonStyle.Primary
   },
 
   SMOKE: {
     id: 'SMOKE',
-    label: '抽煙',
+    label: 'Smoke',
     emoji: '🚬',
     style: ButtonStyle.Secondary
   },
 
   TAKEAWAY: {
     id: 'TAKEAWAY',
-    label: '外賣',
+    label: 'Take Away',
     emoji: '🥡',
     style: ButtonStyle.Primary
   }
+
 };
 
 
@@ -111,32 +153,48 @@ const BUTTONS = {
  * 4. Client
  *******************************************************/
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers
-  ]
-});
+const client =
+  new Client({
+
+    intents: [
+
+      GatewayIntentBits.Guilds,
+
+      GatewayIntentBits.GuildMembers
+
+    ]
+
+  });
 
 
 /*******************************************************
  * 5. Runtime State
  *******************************************************/
 
-let discordReady = false;
-let lastReadyAt = 0;
-let lastGatewayActivity = Date.now();
+let discordReady =
+  false;
 
-let checkingOverdue = false;
-let shuttingDown = false;
+let lastReadyAt =
+  0;
+
+let lastGatewayActivity =
+  Date.now();
+
+let checkingOverdue =
+  false;
+
+let shuttingDown =
+  false;
 
 
 /*
- * Discord Gateway 如果斷線後長時間沒有恢復，
- * 主動結束 Node，Render 會重新啟動服務。
+ * Discord Gateway 斷線後，
+ * 超過 3 分鐘仍未恢復：
  *
- * 不要設太短。
+ * 主動退出 Node，
+ * 交給 Render 重啟。
  */
+
 const GATEWAY_RECOVERY_TIMEOUT =
   3 * 60 * 1000;
 
@@ -146,39 +204,66 @@ const GATEWAY_RECOVERY_TIMEOUT =
  *******************************************************/
 
 const PORT =
-  Number(process.env.PORT || 10000);
+  Number(
+    process.env.PORT ||
+    10000
+  );
 
-http.createServer((req, res) => {
 
-  const body = JSON.stringify({
-    service: '26 Group Attendance',
-    version: 'V2.2-STABLE',
-    http: 'ONLINE',
-    discord:
-      discordReady
-        ? 'READY'
-        : 'NOT_READY',
-    uptimeSeconds:
-      Math.floor(process.uptime())
-  });
+http
+  .createServer(
+    (req, res) => {
 
-  res.writeHead(200, {
-    'Content-Type':
-      'application/json; charset=utf-8'
-  });
+      const body =
+        JSON.stringify({
 
-  res.end(body);
+          service:
+            '26 Group Attendance',
 
-}).listen(
-  PORT,
-  '0.0.0.0',
-  () => {
-    console.log(
-      '[HTTP] listening:',
-      PORT
-    );
-  }
-);
+          version:
+            'V2.3-STABLE',
+
+          http:
+            'ONLINE',
+
+          discord:
+            discordReady
+              ? 'READY'
+              : 'NOT_READY',
+
+          uptimeSeconds:
+            Math.floor(
+              process.uptime()
+            )
+
+        });
+
+
+      res.writeHead(
+        200,
+        {
+          'Content-Type':
+            'application/json; charset=utf-8'
+        }
+      );
+
+
+      res.end(body);
+
+    }
+  )
+  .listen(
+    PORT,
+    '0.0.0.0',
+    () => {
+
+      console.log(
+        '[HTTP] listening:',
+        PORT
+      );
+
+    }
+  );
 
 
 /*******************************************************
@@ -188,114 +273,198 @@ http.createServer((req, res) => {
 function makeButton(item) {
 
   return new ButtonBuilder()
+
     .setCustomId(
-      'attendance:' + item.id
+      'attendance:' +
+      item.id
     )
-    .setLabel(item.label)
-    .setEmoji(item.emoji)
-    .setStyle(item.style);
+
+    .setLabel(
+      item.label
+    )
+
+    .setEmoji(
+      item.emoji
+    )
+
+    .setStyle(
+      item.style
+    );
 }
 
 
-function getEmployeeName(interaction) {
+function getEmployeeName(
+  interaction
+) {
 
   return (
-    interaction.member?.displayName ||
-    interaction.user.globalName ||
-    interaction.user.username
+
+    interaction.member
+      ?.displayName ||
+
+    interaction.user
+      .globalName ||
+
+    interaction.user
+      .username
+
   );
 }
 
 
-function getCompany(interaction) {
+/*
+ * 根據員工使用 /attendance
+ * 的頻道判斷公司。
+ *
+ * 員工不需要自己選公司。
+ */
+
+function getCompany(
+  interaction
+) {
 
   const channelId =
     interaction.channelId;
 
-  if (channelId === CHANNELS.LV) {
-    return 'LV';
+
+  for (
+    const [
+      company,
+      id
+    ]
+    of Object.entries(CHANNELS)
+  ) {
+
+    if (
+      channelId === id
+    ) {
+
+      return company;
+    }
   }
 
-  if (channelId === CHANNELS.LT) {
-    return 'LT';
-  }
-
-  if (channelId === CHANNELS.MMC) {
-    return 'MMC';
-  }
-
-  if (channelId === CHANNELS.LU) {
-    return 'LU';
-  }
 
   throw new Error(
-    '這個頻道沒有啟用考勤功能。'
+    'Attendance is not enabled in this channel.'
   );
 }
 
 
 /*******************************************************
- * 8. Panel
+ * 8. /attendance Panel
  *******************************************************/
 
-function createPanel() {
+function createAttendancePanel(
+  company
+) {
 
   const embed =
     new EmbedBuilder()
 
-      .setColor(0x38A58A)
+      .setColor(
+        0x38A58A
+      )
 
       .setTitle(
-        '📋 26 GROUP｜員工考勤'
+        '📋 26 GROUP | ATTENDANCE'
       )
 
       .setDescription(
-        '**上班考勤**\n' +
-        '🟢 上班　09:00 前完成打卡\n' +
-        '🔴 下班　結束當日工作\n' +
-        '🪑 回座　結束目前離座\n\n' +
 
-        '**離座時間**\n' +
-        '🚻 上廁所　15 分鐘\n' +
-        '🚬 抽煙　7 分鐘\n' +
-        '🥡 外賣　10 分鐘\n\n' +
+        '**Company: ' +
+        company +
+        '**\n\n' +
 
-        '⚠️ 09:00 後上班將記錄遲到\n' +
-        '⚠️ 離座超時將自動公開通報\n\n' +
+        '**WORK**\n' +
+        '🟢 Start Work\n' +
+        '🔴 Off Work\n' +
+        '🪑 Back to Seat\n\n' +
+
+        '**AWAY**\n' +
+        '🚻 Toilet — 15 minutes\n' +
+        '🚬 Smoke — 7 minutes\n' +
+        '🥡 Take Away — 10 minutes\n\n' +
+
+        '⚠️ Late clock-in will be recorded automatically.\n' +
+        '⚠️ Away overtime will be reported automatically.\n\n' +
 
         '🕒 Malaysia Time'
+
       )
 
       .setFooter({
         text:
-          '26 GROUP ATTENDANCE｜V2.2'
+          '26 GROUP ATTENDANCE | V2.3'
       });
 
 
+  /*
+   * 第一排
+   *
+   * Start Work
+   * Off Work
+   * Back to Seat
+   */
+
   const row1 =
     new ActionRowBuilder()
+
       .addComponents(
-        makeButton(BUTTONS.START),
-        makeButton(BUTTONS.OFF),
-        makeButton(BUTTONS.BACK)
+
+        makeButton(
+          BUTTONS.START
+        ),
+
+        makeButton(
+          BUTTONS.OFF
+        ),
+
+        makeButton(
+          BUTTONS.BACK
+        )
+
       );
 
 
+  /*
+   * 第二排
+   *
+   * Toilet
+   * Smoke
+   * Take Away
+   */
+
   const row2 =
     new ActionRowBuilder()
+
       .addComponents(
-        makeButton(BUTTONS.TOILET),
-        makeButton(BUTTONS.SMOKE),
-        makeButton(BUTTONS.TAKEAWAY)
+
+        makeButton(
+          BUTTONS.TOILET
+        ),
+
+        makeButton(
+          BUTTONS.SMOKE
+        ),
+
+        makeButton(
+          BUTTONS.TAKEAWAY
+        )
+
       );
 
 
   return {
-    embeds: [embed],
+
+    embeds: [
+      embed
+    ],
+
     components: [
       row1,
       row2
     ]
+
   };
 }
 
@@ -304,16 +473,21 @@ function createPanel() {
  * 9. Apps Script API
  *******************************************************/
 
-async function sendAttendance(data) {
+async function sendAttendance(
+  data
+) {
 
   const controller =
     new AbortController();
 
+
   const timeout =
     setTimeout(
-      () => controller.abort(),
+      () =>
+        controller.abort(),
       25000
     );
+
 
   try {
 
@@ -321,26 +495,40 @@ async function sendAttendance(data) {
       await fetch(
         APPS_SCRIPT_URL,
         {
-          method: 'POST',
+
+          method:
+            'POST',
 
           headers: {
+
             'Content-Type':
               'text/plain;charset=utf-8'
+
           },
 
-          body: JSON.stringify({
-            ...data,
-            secret: API_SECRET
-          }),
+          body:
+            JSON.stringify({
 
-          redirect: 'follow',
+              ...data,
 
-          signal: controller.signal
+              secret:
+                API_SECRET
+
+            }),
+
+          redirect:
+            'follow',
+
+          signal:
+            controller.signal
+
         }
       );
 
 
-    if (!response.ok) {
+    if (
+      !response.ok
+    ) {
 
       throw new Error(
         'Google API HTTP ' +
@@ -355,35 +543,86 @@ async function sendAttendance(data) {
 
     try {
 
-      return JSON.parse(text);
+      return JSON.parse(
+        text
+      );
 
     } catch {
 
       console.error(
         '[API NON JSON]',
-        text.slice(0, 300)
+        text.slice(
+          0,
+          300
+        )
       );
+
 
       throw new Error(
         'Google API 回應格式錯誤'
       );
+
     }
 
   } finally {
 
-    clearTimeout(timeout);
+    clearTimeout(
+      timeout
+    );
+
   }
 }
 
 
 /*******************************************************
- * 10. Setup Panels
+ * 10. Register /attendance
  *******************************************************/
 
-async function setupPanels() {
+async function registerCommands() {
+
+  const command =
+    new SlashCommandBuilder()
+
+      .setName(
+        'attendance'
+      )
+
+      .setDescription(
+        'Open the employee attendance panel'
+      );
+
+
+  await client.application
+    .commands
+    .set([
+      command.toJSON()
+    ]);
+
+
+  console.log(
+    '[COMMAND] /attendance registered'
+  );
+}
+
+
+/*******************************************************
+ * 11. Remove Old Fixed Panels
+ *
+ * V2.3 不再使用固定考勤面板。
+ *
+ * 啟動時會尋找舊 V1 / V2 / V2.1 / V2.2
+ * 考勤面板並刪除。
+ *
+ * 遲到 / 超時通報不會刪除。
+ *******************************************************/
+
+async function removeOldPanels() {
 
   for (
-    const [company, channelId]
+    const [
+      company,
+      channelId
+    ]
     of Object.entries(CHANNELS)
   ) {
 
@@ -400,12 +639,6 @@ async function setupPanels() {
         !channel.isTextBased()
       ) {
 
-        console.error(
-          '[PANEL]',
-          company,
-          '不是文字頻道'
-        );
-
         continue;
       }
 
@@ -416,80 +649,119 @@ async function setupPanels() {
         });
 
 
-      const oldPanel =
-        messages.find(message => {
+      const oldPanels =
+        messages.filter(
+          message => {
 
-          if (
-            message.author.id !==
-            client.user.id
-          ) {
-            return false;
+            if (
+              message.author.id !==
+              client.user.id
+            ) {
+
+              return false;
+            }
+
+
+            return message.embeds.some(
+              embed => {
+
+                const footer =
+                  embed.footer
+                    ?.text ||
+                  '';
+
+
+                const title =
+                  embed.title ||
+                  '';
+
+
+                return (
+
+                  footer ===
+                    '26 GROUP ATTENDANCE PANEL V1' ||
+
+                  footer ===
+                    '26 GROUP ATTENDANCE PANEL V2' ||
+
+                  footer ===
+                    '26 GROUP ATTENDANCE｜V2.1' ||
+
+                  footer ===
+                    '26 GROUP ATTENDANCE｜V2.2' ||
+
+                  title ===
+                    '📋 26 GROUP｜員工考勤'
+
+                );
+
+              }
+            );
+
           }
+        );
 
 
-          return message.embeds.some(
-            embed => {
+      if (
+        oldPanels.size === 0
+      ) {
 
-              const footer =
-                embed.footer?.text || '';
+        console.log(
+          '[OLD PANEL]',
+          company,
+          '沒有舊面板'
+        );
 
-              return (
-                footer ===
-                  '26 GROUP ATTENDANCE PANEL V1' ||
+        continue;
+      }
 
-                footer ===
-                  '26 GROUP ATTENDANCE PANEL V2' ||
 
-                footer ===
-                  '26 GROUP ATTENDANCE｜V2.1' ||
+      for (
+        const message
+        of oldPanels.values()
+      ) {
 
-                footer ===
-                  '26 GROUP ATTENDANCE｜V2.2'
+        await message
+          .delete()
+          .catch(
+            error => {
+
+              console.error(
+                '[OLD PANEL DELETE ERROR]',
+                company,
+                error.message
               );
+
             }
           );
-        });
 
-
-      if (oldPanel) {
-
-        await oldPanel.edit(
-          createPanel()
-        );
-
-        console.log(
-          '[PANEL]',
-          company,
-          '沿用現有面板'
-        );
-
-      } else {
-
-        await channel.send(
-          createPanel()
-        );
-
-        console.log(
-          '[PANEL]',
-          company,
-          '建立新面板'
-        );
       }
+
+
+      console.log(
+        '[OLD PANEL]',
+        company,
+        '舊面板已清除'
+      );
+
 
     } catch (error) {
 
       console.error(
-        '[PANEL ERROR]',
+        '[OLD PANEL ERROR]',
         company,
         error.message
       );
+
     }
+
   }
+
 }
 
 
 /*******************************************************
- * 11. Late Notice
+ * 12. Late Notice
  *******************************************************/
 
 async function sendLateNotice(
@@ -507,55 +779,108 @@ async function sendLateNotice(
       !channel ||
       !channel.isTextBased()
     ) {
+
       return;
     }
+
+
+    /*
+     * 不再寫死 09:00。
+     *
+     * Apps Script 回傳：
+     *
+     * LV/LT/MMC -> 09:00
+     * LU        -> 13:00
+     *
+     * 未來鑫晨也是讀 Apps Script。
+     */
+
+    const workStart =
+      result.workStartDisplay ||
+      (
+        result.workStart
+          ? String(
+              result.workStart
+            ).substring(
+              0,
+              5
+            )
+          : '--:--'
+      );
 
 
     const embed =
       new EmbedBuilder()
 
-        .setColor(0xE67E22)
+        .setColor(
+          0xE67E22
+        )
 
         .setTitle(
           '⚠️ 員工遲到通報'
         )
 
         .setDescription(
+
           '<@' +
           interaction.user.id +
           '> 上班打卡遲到。'
+
         )
 
         .addFields(
+
           {
-            name: '公司',
+            name:
+              '公司',
+
             value:
-              String(result.company),
-            inline: true
+              String(
+                result.company
+              ),
+
+            inline:
+              true
           },
 
           {
-            name: '規定時間',
-            value: '09:00',
-            inline: true
-          },
+            name:
+              '規定時間',
 
-          {
-            name: '實際打卡',
             value:
-              String(result.time),
-            inline: true
+              workStart,
+
+            inline:
+              true
           },
 
           {
-            name: '遲到時間',
+            name:
+              '實際打卡',
+
+            value:
+              String(
+                result.time
+              ),
+
+            inline:
+              true
+          },
+
+          {
+            name:
+              '遲到時間',
+
             value:
               String(
                 result.lateMinutes
               ) +
               ' 分鐘',
-            inline: true
+
+            inline:
+              true
           }
+
         )
 
         .setFooter({
@@ -565,7 +890,9 @@ async function sendLateNotice(
 
 
     await channel.send({
-      embeds: [embed]
+      embeds: [
+        embed
+      ]
     });
 
 
@@ -573,9 +900,13 @@ async function sendLateNotice(
       '[LATE]',
       result.company,
       result.employee,
+      'Schedule:',
+      workStart,
+      'Late:',
       result.lateMinutes +
-        '分鐘'
+      '分鐘'
     );
+
 
   } catch (error) {
 
@@ -583,12 +914,14 @@ async function sendLateNotice(
       '[LATE ERROR]',
       error.message
     );
+
   }
+
 }
 
 
 /*******************************************************
- * 12. Overdue Check
+ * 13. Overdue Check
  *******************************************************/
 
 async function checkOverdue() {
@@ -597,23 +930,29 @@ async function checkOverdue() {
     checkingOverdue ||
     !discordReady
   ) {
+
     return;
   }
 
 
-  checkingOverdue = true;
+  checkingOverdue =
+    true;
 
 
   try {
 
     const result =
       await sendAttendance({
+
         operation:
           'CHECK_OVERDUE'
+
       });
 
 
-    if (!result.ok) {
+    if (
+      !result.ok
+    ) {
 
       console.error(
         '[OVERDUE API ERROR]',
@@ -630,6 +969,7 @@ async function checkOverdue() {
       ) ||
       result.overdue.length === 0
     ) {
+
       return;
     }
 
@@ -642,10 +982,14 @@ async function checkOverdue() {
       try {
 
         const channelId =
-          CHANNELS[item.company];
+          CHANNELS[
+            item.company
+          ];
 
 
-        if (!channelId) {
+        if (
+          !channelId
+        ) {
 
           console.error(
             '[OVERDUE CHANNEL ERROR]',
@@ -666,6 +1010,7 @@ async function checkOverdue() {
           !channel ||
           !channel.isTextBased()
         ) {
+
           continue;
         }
 
@@ -673,73 +1018,105 @@ async function checkOverdue() {
         const embed =
           new EmbedBuilder()
 
-            .setColor(0xE74C3C)
+            .setColor(
+              0xE74C3C
+            )
 
             .setTitle(
               '🚨 員工離座超時通報'
             )
 
             .setDescription(
+
               '<@' +
               item.discordId +
               '> 已超過規定離座時間。'
+
             )
 
             .addFields(
+
               {
-                name: '公司',
+                name:
+                  '公司',
+
                 value:
-                  String(item.company),
-                inline: true
+                  String(
+                    item.company
+                  ),
+
+                inline:
+                  true
               },
 
               {
-                name: '類型',
+                name:
+                  '類型',
+
                 value:
                   String(
                     item.awayLabel
                   ),
-                inline: true
+
+                inline:
+                  true
               },
 
               {
-                name: '開始時間',
+                name:
+                  '開始時間',
+
                 value:
                   String(
                     item.startTime
                   ),
-                inline: true
+
+                inline:
+                  true
               },
 
               {
-                name: '規定時間',
+                name:
+                  '規定時間',
+
                 value:
                   String(
                     item.limitMinutes
                   ) +
                   ' 分鐘',
-                inline: true
+
+                inline:
+                  true
               },
 
               {
-                name: '目前已離座',
+                name:
+                  '目前已離座',
+
                 value:
                   String(
                     item.elapsedMinutes
                   ) +
                   ' 分鐘',
-                inline: true
+
+                inline:
+                  true
               },
 
               {
-                name: '目前超時',
+                name:
+                  '目前超時',
+
                 value:
                   String(
                     item.overdueMinutes
                   ) +
                   ' 分鐘',
-                inline: true
+
+                inline:
+                  true
               }
+
             )
 
             .setFooter({
@@ -749,7 +1126,9 @@ async function checkOverdue() {
 
 
         await channel.send({
-          embeds: [embed]
+          embeds: [
+            embed
+          ]
         });
 
 
@@ -759,8 +1138,9 @@ async function checkOverdue() {
           item.employee,
           item.awayLabel,
           item.overdueMinutes +
-            '分鐘'
+          '分鐘'
         );
+
 
       } catch (error) {
 
@@ -768,34 +1148,47 @@ async function checkOverdue() {
           '[OVERDUE SEND ERROR]',
           error.message
         );
+
       }
+
     }
+
 
   } catch (error) {
 
     console.error(
       '[OVERDUE ERROR]',
-      error.name === 'AbortError'
+
+      error.name ===
+        'AbortError'
+
         ? 'Google API timeout'
+
         : error.message
     );
 
+
   } finally {
 
-    checkingOverdue = false;
+    checkingOverdue =
+      false;
+
   }
+
 }
 
 
 /*******************************************************
- * 13. Discord Ready
+ * 14. Discord Ready
  *******************************************************/
 
 client.once(
   Events.ClientReady,
+
   async readyClient => {
 
-    discordReady = true;
+    discordReady =
+      true;
 
     lastReadyAt =
       Date.now();
@@ -810,8 +1203,34 @@ client.once(
     );
 
 
-    await setupPanels();
+    /*
+     * 註冊 /attendance
+     */
 
+    try {
+
+      await registerCommands();
+
+    } catch (error) {
+
+      console.error(
+        '[COMMAND ERROR]',
+        error.message
+      );
+
+    }
+
+
+    /*
+     * 清掉舊固定面板
+     */
+
+    await removeOldPanels();
+
+
+    /*
+     * 啟動後立即檢查一次超時
+     */
 
     await checkOverdue();
 
@@ -819,19 +1238,22 @@ client.once(
     console.log(
       '[MONITOR] 離座超時監控啟動'
     );
+
   }
 );
 
 
 /*******************************************************
- * 14. Gateway Monitoring
+ * 15. Gateway Monitoring
  *******************************************************/
 
 client.on(
   'shardReady',
+
   shardId => {
 
-    discordReady = true;
+    discordReady =
+      true;
 
     lastReadyAt =
       Date.now();
@@ -844,18 +1266,21 @@ client.on(
       '[SHARD READY]',
       shardId
     );
+
   }
 );
 
 
 client.on(
   'shardResume',
+
   (
     shardId,
     replayedEvents
   ) => {
 
-    discordReady = true;
+    discordReady =
+      true;
 
     lastGatewayActivity =
       Date.now();
@@ -868,18 +1293,21 @@ client.on(
       'Replayed:',
       replayedEvents
     );
+
   }
 );
 
 
 client.on(
   'shardDisconnect',
+
   (
     event,
     shardId
   ) => {
 
-    discordReady = false;
+    discordReady =
+      false;
 
     lastGatewayActivity =
       Date.now();
@@ -892,17 +1320,21 @@ client.on(
       'Code:',
       event?.code,
       'Reason:',
-      event?.reason || ''
+      event?.reason ||
+      ''
     );
+
   }
 );
 
 
 client.on(
   'shardReconnecting',
+
   shardId => {
 
-    discordReady = false;
+    discordReady =
+      false;
 
     lastGatewayActivity =
       Date.now();
@@ -913,12 +1345,14 @@ client.on(
       'Shard:',
       shardId
     );
+
   }
 );
 
 
 client.on(
   'shardError',
+
   (
     error,
     shardId
@@ -934,23 +1368,130 @@ client.on(
       shardId,
       error.message
     );
+
   }
 );
 
 
 /*******************************************************
- * 15. Button Interaction
+ * 16. Interaction
+ *
+ * 同時處理：
+ *
+ * A. /attendance
+ * B. attendance 按鈕
  *******************************************************/
 
 client.on(
   Events.InteractionCreate,
+
   async interaction => {
 
     lastGatewayActivity =
       Date.now();
 
 
-    if (!interaction.isButton()) {
+    /***************************************************
+     * A. /attendance
+     ***************************************************/
+
+    if (
+      interaction.isChatInputCommand() &&
+      interaction.commandName ===
+        'attendance'
+    ) {
+
+      console.log(
+        '[COMMAND]',
+        '/attendance',
+        'User:',
+        interaction.user.id,
+        'Channel:',
+        interaction.channelId
+      );
+
+
+      try {
+
+        const company =
+          getCompany(
+            interaction
+          );
+
+
+        await interaction.reply({
+
+          ...createAttendancePanel(
+            company
+          ),
+
+          flags:
+            MessageFlags.Ephemeral
+
+        });
+
+
+        console.log(
+          '[PANEL OPEN]',
+          company,
+          interaction.user.id
+        );
+
+
+      } catch (error) {
+
+        console.error(
+          '[COMMAND ERROR]',
+          error.message
+        );
+
+
+        if (
+          interaction.replied ||
+          interaction.deferred
+        ) {
+
+          await interaction
+            .editReply({
+              content:
+                '❌ ' +
+                error.message
+            })
+            .catch(() => {});
+
+
+        } else {
+
+          await interaction
+            .reply({
+
+              content:
+                '❌ ' +
+                error.message,
+
+              flags:
+                MessageFlags.Ephemeral
+
+            })
+            .catch(() => {});
+
+        }
+
+      }
+
+
+      return;
+    }
+
+
+    /***************************************************
+     * B. Attendance Button
+     ***************************************************/
+
+    if (
+      !interaction.isButton()
+    ) {
+
       return;
     }
 
@@ -961,6 +1502,7 @@ client.on(
           'attendance:'
         )
     ) {
+
       return;
     }
 
@@ -970,7 +1512,10 @@ client.on(
         .split(':')[1];
 
 
-    if (!BUTTONS[action]) {
+    if (
+      !BUTTONS[action]
+    ) {
+
       return;
     }
 
@@ -998,13 +1543,20 @@ client.on(
 
     /*
      * Discord ACK
+     *
+     * 一定先 ACK，
+     * 避免「APP 未能及時回應」。
      */
+
     try {
 
-      await interaction.deferReply({
-        flags:
-          MessageFlags.Ephemeral
-      });
+      await interaction
+        .deferReply({
+
+          flags:
+            MessageFlags.Ephemeral
+
+        });
 
 
       console.log(
@@ -1012,6 +1564,7 @@ client.on(
         interaction.id,
         action
       );
+
 
     } catch (error) {
 
@@ -1045,6 +1598,7 @@ client.on(
 
       const result =
         await sendAttendance({
+
           eventId:
             interaction.id,
 
@@ -1059,64 +1613,113 @@ client.on(
 
           employee:
             employee
+
         });
 
 
       console.log(
         '[API RESULT]',
         interaction.id,
+
         JSON.stringify({
-          ok: result.ok,
-          code: result.code,
-          message: result.message
+
+          ok:
+            result.ok,
+
+          code:
+            result.code,
+
+          message:
+            result.message,
+
+          workStart:
+            result.workStart
+
         })
       );
 
 
-      if (!result.ok) {
+      /*************************************************
+       * API Error
+       *************************************************/
 
-        await interaction.editReply({
-          content:
-            '⚠️ ' +
-            (
-              result.message ||
-              '打卡失敗'
-            )
-        });
+      if (
+        !result.ok
+      ) {
+
+        await interaction
+          .editReply({
+
+            content:
+
+              '⚠️ ' +
+              (
+                result.message ||
+                'Attendance failed.'
+              )
+
+          });
+
 
         return;
       }
 
 
-      if (result.duplicate) {
+      /*************************************************
+       * Duplicate
+       *************************************************/
 
-        await interaction.editReply({
-          content:
-            '⚠️ 這次打卡已經記錄過。'
-        });
+      if (
+        result.duplicate
+      ) {
+
+        await interaction
+          .editReply({
+
+            content:
+              '⚠️ This attendance action has already been recorded.'
+
+          });
+
 
         return;
       }
+
+
+      /*************************************************
+       * Success Message
+       *************************************************/
+
+      let englishAction =
+        BUTTONS[action]
+          ?.label ||
+        action;
 
 
       let content =
+
         '✅ **' +
-        result.message +
+        englishAction +
+        ' recorded successfully.**\n\n' +
+
+        'Company: **' +
+        result.company +
         '**\n' +
 
-        '公司：' +
-        result.company +
-        '\n' +
-
-        '員工：' +
+        'Employee: **' +
         result.employee +
-        '\n' +
+        '**\n' +
 
-        '時間：' +
+        'Time: **' +
         result.date +
         ' ' +
-        result.time;
+        result.time +
+        '**';
 
+
+      /*
+       * 離座開始
+       */
 
       if (
         action === 'TOILET' ||
@@ -1125,11 +1728,17 @@ client.on(
       ) {
 
         content +=
-          '\n限時：' +
+
+          '\nLimit: **' +
           result.awayLimit +
-          ' 分鐘';
+          ' minutes**';
+
       }
 
+
+      /*
+       * 回座
+       */
 
       if (
         action === 'BACK' &&
@@ -1137,26 +1746,76 @@ client.on(
       ) {
 
         content +=
-          '\n離座時間：' +
+
+          '\nAway Duration: **' +
           result.durationMinutes +
-          ' 分鐘';
+          ' minutes**';
 
 
         if (
-          result.overdue === true
+          result.overdue ===
+          true
         ) {
 
           content +=
-            '\n超時：' +
+
+            '\nOverdue: **' +
             result.overdueMinutes +
-            ' 分鐘';
+            ' minutes**';
+
         }
+
       }
 
 
-      await interaction.editReply({
-        content: content
-      });
+      /*
+       * 上班時顯示班次
+       */
+
+      if (
+        action === 'START' &&
+        result.workStart
+      ) {
+
+        const workStart =
+          result.workStartDisplay ||
+          String(
+            result.workStart
+          ).substring(
+            0,
+            5
+          );
+
+
+        content +=
+
+          '\nScheduled Start: **' +
+          workStart +
+          '**';
+
+
+        if (
+          result.late === true
+        ) {
+
+          content +=
+
+            '\nLate: **' +
+            result.lateMinutes +
+            ' minutes**';
+
+        }
+
+      }
+
+
+      await interaction
+        .editReply({
+
+          content:
+            content
+
+        });
 
 
       console.log(
@@ -1169,6 +1828,10 @@ client.on(
       );
 
 
+      /*************************************************
+       * Late Public Notice
+       *************************************************/
+
       if (
         action === 'START' &&
         result.late === true
@@ -1178,7 +1841,9 @@ client.on(
           interaction,
           result
         );
+
       }
+
 
     } catch (error) {
 
@@ -1192,58 +1857,72 @@ client.on(
 
       await interaction
         .editReply({
+
           content:
+
             '❌ ' +
             (
               error.name ===
                 'AbortError'
-                ? '連線逾時，請聯絡管理員確認記錄。'
+
+                ? 'Connection timeout. Please contact an administrator to confirm the record.'
+
                 : error.message
             )
-        })
-        .catch(error2 => {
 
-          console.error(
-            '[EDIT REPLY FAILED]',
-            interaction.id,
-            error2.message
-          );
-        });
+        })
+        .catch(
+          error2 => {
+
+            console.error(
+              '[EDIT REPLY FAILED]',
+              interaction.id,
+              error2.message
+            );
+
+          }
+        );
+
     }
+
   }
 );
 
 
 /*******************************************************
- * 16. 每分鐘工作
+ * 17. 每分鐘檢查離座超時
  *******************************************************/
 
 setInterval(
+
   async () => {
 
-    if (discordReady) {
+    if (
+      discordReady
+    ) {
 
       await checkOverdue();
+
     }
 
   },
+
   60 * 1000
+
 );
 
 
 /*******************************************************
- * 17. Gateway Watchdog
+ * 18. Gateway Watchdog
  *
- * 每 30 秒檢查 Discord Client 狀態。
+ * 每 30 秒檢查 Discord Client。
  *
- * 如果 Discord 明確不是 Ready，
- * 且超過 3 分鐘仍沒有恢復，
- * 主動退出。
- *
- * Render 會依服務設定重新啟動 Node。
+ * 3 分鐘沒有恢復：
+ * 退出 Node → Render Restart
  *******************************************************/
 
 setInterval(
+
   () => {
 
     const now =
@@ -1251,7 +1930,8 @@ setInterval(
 
 
     const wsStatus =
-      client.ws?.status;
+      client.ws
+        ?.status;
 
 
     const isReady =
@@ -1269,13 +1949,17 @@ setInterval(
       'Uptime:',
       Math.floor(
         process.uptime()
-      ) + 's'
+      ) +
+      's'
     );
 
 
-    if (isReady) {
+    if (
+      isReady
+    ) {
 
-      discordReady = true;
+      discordReady =
+        true;
 
       lastGatewayActivity =
         now;
@@ -1284,7 +1968,8 @@ setInterval(
     }
 
 
-    discordReady = false;
+    discordReady =
+      false;
 
 
     const downFor =
@@ -1296,7 +1981,8 @@ setInterval(
       '[GATEWAY NOT READY]',
       'Down:',
       Math.floor(
-        downFor / 1000
+        downFor /
+        1000
       ),
       'seconds'
     );
@@ -1315,71 +2001,84 @@ setInterval(
       gracefulRestart(
         'Gateway recovery timeout'
       );
+
     }
 
   },
+
   30 * 1000
+
 );
 
 
 /*******************************************************
- * 18. Discord Client Error
+ * 19. Discord Client Error
  *******************************************************/
 
 client.on(
   Events.Error,
+
   error => {
 
     console.error(
       '[DISCORD CLIENT ERROR]',
       error
     );
+
   }
 );
 
 
 /*******************************************************
- * 19. Node Error
+ * 20. Node Error
  *******************************************************/
 
 process.on(
   'unhandledRejection',
+
   error => {
 
     console.error(
       '[UNHANDLED REJECTION]',
       error
     );
+
   }
 );
 
 
 process.on(
   'uncaughtException',
+
   error => {
 
     console.error(
       '[UNCAUGHT EXCEPTION]',
       error
     );
+
   }
 );
 
 
 /*******************************************************
- * 20. Graceful Restart
+ * 21. Graceful Restart
  *******************************************************/
 
 async function gracefulRestart(
   reason
 ) {
 
-  if (shuttingDown) {
+  if (
+    shuttingDown
+  ) {
+
     return;
   }
 
 
-  shuttingDown = true;
+  shuttingDown =
+    true;
 
 
   console.error(
@@ -1398,35 +2097,47 @@ async function gracefulRestart(
       '[DESTROY ERROR]',
       error.message
     );
+
   }
 
 
   setTimeout(
+
     () => {
 
       process.exit(1);
 
     },
+
     1500
+
   );
+
 }
 
 
 /*******************************************************
- * 21. Login
+ * 22. Login
  *******************************************************/
 
 console.log(
-  '[BOOT] 26 GROUP ATTENDANCE V2.2 STABLE'
+  '[BOOT] 26 GROUP ATTENDANCE V2.3 STABLE'
 );
 
-client.login(TOKEN)
-  .catch(error => {
 
-    console.error(
-      '[LOGIN FAILED]',
-      error
-    );
+client
+  .login(
+    TOKEN
+  )
+  .catch(
+    error => {
 
-    process.exit(1);
-  });
+      console.error(
+        '[LOGIN FAILED]',
+        error
+      );
+
+      process.exit(1);
+
+    }
+  );
