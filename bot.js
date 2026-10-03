@@ -80,6 +80,7 @@ if (
  *
  * Apps Script 再設定對應班次即可。
  *******************************************************/
+const GUILD_ID = '1477226931941539973';
 
 const CHANNELS = {
 
@@ -578,7 +579,12 @@ async function sendAttendance(
  * 10. Register /attendance
  *******************************************************/
 
-async function registerCommands() {
+async function async function registerCommands() {
+
+  const guild =
+    await client.guilds.fetch(
+      GUILD_ID
+    );
 
   const command =
     new SlashCommandBuilder()
@@ -592,15 +598,15 @@ async function registerCommands() {
       );
 
 
-  await client.application
-    .commands
-    .set([
-      command.toJSON()
-    ]);
+  await guild.commands.set([
+    command.toJSON()
+  ]);
 
 
   console.log(
-    '[COMMAND] /attendance registered'
+    '[COMMAND] /attendance registered to guild:',
+    guild.name,
+    '(' + GUILD_ID + ')'
   );
 }
 
