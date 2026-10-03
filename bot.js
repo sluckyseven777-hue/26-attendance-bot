@@ -14,31 +14,20 @@ const http = require('node:http');
 
 
 /*******************************************************
- * 26 GROUP ATTENDANCE BOT V2.3 STABLE
+ * 26 GROUP ATTENDANCE BOT V2.3.1 STABLE
  *
  * /attendance 私人考勤面板
  *
  * 班次時間由 Apps Script 控制：
- * LV  = 09:00
- * LT  = 09:00
- * MMC = 09:00
- * LU  = 13:00
+ * LV / LT / MMC = 09:00
+ * LU = 13:00
  *
- * 未來可直接增加：
- * XINCHEN / SG / IRL 等不同班次
+ * 未來鑫晨可設定另一個時間。
  *
- * 離座限制：
- * Toilet    = 15 min
- * Smoke     = 7 min
+ * 離座：
+ * Toilet = 15 min
+ * Smoke = 7 min
  * Take Away = 10 min
- *
- * 保留 V2.2 STABLE：
- * - Discord Gateway 狀態監控
- * - Gateway 斷線自動恢復
- * - 長時間失聯交給 Render 重啟
- * - Interaction 詳細診斷
- * - Apps Script timeout
- * - 超時監控防重疊
  *******************************************************/
 
 
@@ -71,16 +60,16 @@ if (
 
 
 /*******************************************************
- * 2. Attendance Channels
- *
- * 未來鑫晨加入：
- *
- * 例如：
- * XINCHEN: 'CHANNEL_ID'
- *
- * Apps Script 再設定對應班次即可。
+ * 2. Discord Server
  *******************************************************/
-const GUILD_ID = '1477226931941539973';
+
+const GUILD_ID =
+  '1477226931941539973';
+
+
+/*******************************************************
+ * 3. Attendance Channels
+ *******************************************************/
 
 const CHANNELS = {
 
@@ -100,7 +89,7 @@ const CHANNELS = {
 
 
 /*******************************************************
- * 3. Buttons
+ * 4. Buttons
  *******************************************************/
 
 const BUTTONS = {
@@ -151,25 +140,22 @@ const BUTTONS = {
 
 
 /*******************************************************
- * 4. Client
+ * 5. Client
  *******************************************************/
 
 const client =
   new Client({
 
     intents: [
-
       GatewayIntentBits.Guilds,
-
       GatewayIntentBits.GuildMembers
-
     ]
 
   });
 
 
 /*******************************************************
- * 5. Runtime State
+ * 6. Runtime State
  *******************************************************/
 
 let discordReady =
@@ -188,20 +174,12 @@ let shuttingDown =
   false;
 
 
-/*
- * Discord Gateway 斷線後，
- * 超過 3 分鐘仍未恢復：
- *
- * 主動退出 Node，
- * 交給 Render 重啟。
- */
-
 const GATEWAY_RECOVERY_TIMEOUT =
   3 * 60 * 1000;
 
 
 /*******************************************************
- * 6. HTTP Server
+ * 7. HTTP Server
  *******************************************************/
 
 const PORT =
@@ -222,7 +200,7 @@ http
             '26 Group Attendance',
 
           version:
-            'V2.3-STABLE',
+            'V2.3.1-STABLE',
 
           http:
             'ONLINE',
@@ -268,7 +246,7 @@ http
 
 
 /*******************************************************
- * 7. Helpers
+ * 8. Helpers
  *******************************************************/
 
 function makeButton(item) {
@@ -299,26 +277,12 @@ function getEmployeeName(
 ) {
 
   return (
-
-    interaction.member
-      ?.displayName ||
-
-    interaction.user
-      .globalName ||
-
-    interaction.user
-      .username
-
+    interaction.member?.displayName ||
+    interaction.user.globalName ||
+    interaction.user.username
   );
 }
 
-
-/*
- * 根據員工使用 /attendance
- * 的頻道判斷公司。
- *
- * 員工不需要自己選公司。
- */
 
 function getCompany(
   interaction
@@ -329,10 +293,7 @@ function getCompany(
 
 
   for (
-    const [
-      company,
-      id
-    ]
+    const [company, id]
     of Object.entries(CHANNELS)
   ) {
 
@@ -346,13 +307,13 @@ function getCompany(
 
 
   throw new Error(
-    'Attendance is not enabled in this channel.'
+    'Attendance is not enabled in this channel.｜此頻道未啟用考勤。'
   );
 }
 
 
 /*******************************************************
- * 8. /attendance Panel
+ * 9. Attendance Panel
  *******************************************************/
 
 function createAttendancePanel(
@@ -372,40 +333,35 @@ function createAttendancePanel(
 
       .setDescription(
 
-        '**Company: ' +
+        '**Company｜公司：' +
         company +
         '**\n\n' +
 
-        '**WORK**\n' +
-        '🟢 Start Work\n' +
-        '🔴 Off Work\n' +
-        '🪑 Back to Seat\n\n' +
+        '**WORK｜上下班**\n' +
+        '🟢 Start Work｜上班\n' +
+        '🔴 Off Work｜下班\n' +
+        '🪑 Back to Seat｜回座\n\n' +
 
-        '**AWAY**\n' +
-        '🚻 Toilet — 15 minutes\n' +
-        '🚬 Smoke — 7 minutes\n' +
-        '🥡 Take Away — 10 minutes\n\n' +
+        '**AWAY｜離座**\n' +
+        '🚻 Toilet｜上廁所 — 15 minutes / 分鐘\n' +
+        '🚬 Smoke｜抽煙 — 7 minutes / 分鐘\n' +
+        '🥡 Take Away｜外賣 — 10 minutes / 分鐘\n\n' +
 
         '⚠️ Late clock-in will be recorded automatically.\n' +
-        '⚠️ Away overtime will be reported automatically.\n\n' +
+        '遲到將自動記錄並公開通報。\n\n' +
 
-        '🕒 Malaysia Time'
+        '⚠️ Away overtime will be reported automatically.\n' +
+        '離座超時將自動公開通報。\n\n' +
+
+        '🕒 Malaysia Time｜馬來西亞時間'
 
       )
 
       .setFooter({
         text:
-          '26 GROUP ATTENDANCE | V2.3'
+          '26 GROUP ATTENDANCE | V2.3.1'
       });
 
-
-  /*
-   * 第一排
-   *
-   * Start Work
-   * Off Work
-   * Back to Seat
-   */
 
   const row1 =
     new ActionRowBuilder()
@@ -426,14 +382,6 @@ function createAttendancePanel(
 
       );
 
-
-  /*
-   * 第二排
-   *
-   * Toilet
-   * Smoke
-   * Take Away
-   */
 
   const row2 =
     new ActionRowBuilder()
@@ -471,7 +419,7 @@ function createAttendancePanel(
 
 
 /*******************************************************
- * 9. Apps Script API
+ * 10. Apps Script API
  *******************************************************/
 
 async function sendAttendance(
@@ -562,8 +510,8 @@ async function sendAttendance(
       throw new Error(
         'Google API 回應格式錯誤'
       );
-
     }
+
 
   } finally {
 
@@ -576,7 +524,7 @@ async function sendAttendance(
 
 
 /*******************************************************
- * 10. Register /attendance
+ * 11. Register /attendance
  *******************************************************/
 
 async function registerCommands() {
@@ -585,6 +533,7 @@ async function registerCommands() {
     await client.guilds.fetch(
       GUILD_ID
     );
+
 
   const command =
     new SlashCommandBuilder()
@@ -608,161 +557,6 @@ async function registerCommands() {
     guild.name,
     '(' + GUILD_ID + ')'
   );
-}
-
-
-/*******************************************************
- * 11. Remove Old Fixed Panels
- *
- * V2.3 不再使用固定考勤面板。
- *
- * 啟動時會尋找舊 V1 / V2 / V2.1 / V2.2
- * 考勤面板並刪除。
- *
- * 遲到 / 超時通報不會刪除。
- *******************************************************/
-
-async function removeOldPanels() {
-
-  for (
-    const [
-      company,
-      channelId
-    ]
-    of Object.entries(CHANNELS)
-  ) {
-
-    try {
-
-      const channel =
-        await client.channels.fetch(
-          channelId
-        );
-
-
-      if (
-        !channel ||
-        !channel.isTextBased()
-      ) {
-
-        continue;
-      }
-
-
-      const messages =
-        await channel.messages.fetch({
-          limit: 100
-        });
-
-
-      const oldPanels =
-        messages.filter(
-          message => {
-
-            if (
-              message.author.id !==
-              client.user.id
-            ) {
-
-              return false;
-            }
-
-
-            return message.embeds.some(
-              embed => {
-
-                const footer =
-                  embed.footer
-                    ?.text ||
-                  '';
-
-
-                const title =
-                  embed.title ||
-                  '';
-
-
-                return (
-
-                  footer ===
-                    '26 GROUP ATTENDANCE PANEL V1' ||
-
-                  footer ===
-                    '26 GROUP ATTENDANCE PANEL V2' ||
-
-                  footer ===
-                    '26 GROUP ATTENDANCE｜V2.1' ||
-
-                  footer ===
-                    '26 GROUP ATTENDANCE｜V2.2' ||
-
-                  title ===
-                    '📋 26 GROUP｜員工考勤'
-
-                );
-
-              }
-            );
-
-          }
-        );
-
-
-      if (
-        oldPanels.size === 0
-      ) {
-
-        console.log(
-          '[OLD PANEL]',
-          company,
-          '沒有舊面板'
-        );
-
-        continue;
-      }
-
-
-      for (
-        const message
-        of oldPanels.values()
-      ) {
-
-        await message
-          .delete()
-          .catch(
-            error => {
-
-              console.error(
-                '[OLD PANEL DELETE ERROR]',
-                company,
-                error.message
-              );
-
-            }
-          );
-
-      }
-
-
-      console.log(
-        '[OLD PANEL]',
-        company,
-        '舊面板已清除'
-      );
-
-
-    } catch (error) {
-
-      console.error(
-        '[OLD PANEL ERROR]',
-        company,
-        error.message
-      );
-
-    }
-
-  }
-
 }
 
 
@@ -791,14 +585,11 @@ async function sendLateNotice(
 
 
     /*
-     * 不再寫死 09:00。
+     * 由 Apps Script 回傳各公司的班次。
      *
-     * Apps Script 回傳：
-     *
-     * LV/LT/MMC -> 09:00
-     * LU        -> 13:00
-     *
-     * 未來鑫晨也是讀 Apps Script。
+     * LV/LT/MMC = 09:00
+     * LU = 13:00
+     * 鑫晨未來可使用另一時間。
      */
 
     const workStart =
@@ -823,10 +614,14 @@ async function sendLateNotice(
         )
 
         .setTitle(
-          '⚠️ 員工遲到通報'
+          '⚠️ Late Attendance Notice｜員工遲到通報'
         )
 
         .setDescription(
+
+          '<@' +
+          interaction.user.id +
+          '> clocked in late.\n' +
 
           '<@' +
           interaction.user.id +
@@ -838,7 +633,7 @@ async function sendLateNotice(
 
           {
             name:
-              '公司',
+              'Company｜公司',
 
             value:
               String(
@@ -851,7 +646,7 @@ async function sendLateNotice(
 
           {
             name:
-              '規定時間',
+              'Scheduled Start｜規定時間',
 
             value:
               workStart,
@@ -862,7 +657,7 @@ async function sendLateNotice(
 
           {
             name:
-              '實際打卡',
+              'Clock-in Time｜實際打卡',
 
             value:
               String(
@@ -875,13 +670,13 @@ async function sendLateNotice(
 
           {
             name:
-              '遲到時間',
+              'Late｜遲到',
 
             value:
               String(
                 result.lateMinutes
               ) +
-              ' 分鐘',
+              ' minutes / 分鐘',
 
             inline:
               true
@@ -922,7 +717,6 @@ async function sendLateNotice(
     );
 
   }
-
 }
 
 
@@ -1029,10 +823,14 @@ async function checkOverdue() {
             )
 
             .setTitle(
-              '🚨 員工離座超時通報'
+              '🚨 Away Overtime Notice｜離座超時通報'
             )
 
             .setDescription(
+
+              '<@' +
+              item.discordId +
+              '> exceeded the allowed away time.\n' +
 
               '<@' +
               item.discordId +
@@ -1044,7 +842,7 @@ async function checkOverdue() {
 
               {
                 name:
-                  '公司',
+                  'Company｜公司',
 
                 value:
                   String(
@@ -1057,7 +855,7 @@ async function checkOverdue() {
 
               {
                 name:
-                  '類型',
+                  'Type｜類型',
 
                 value:
                   String(
@@ -1070,7 +868,7 @@ async function checkOverdue() {
 
               {
                 name:
-                  '開始時間',
+                  'Start Time｜開始時間',
 
                 value:
                   String(
@@ -1083,13 +881,13 @@ async function checkOverdue() {
 
               {
                 name:
-                  '規定時間',
+                  'Time Limit｜規定時間',
 
                 value:
                   String(
                     item.limitMinutes
                   ) +
-                  ' 分鐘',
+                  ' minutes / 分鐘',
 
                 inline:
                   true
@@ -1097,13 +895,13 @@ async function checkOverdue() {
 
               {
                 name:
-                  '目前已離座',
+                  'Away Duration｜目前已離座',
 
                 value:
                   String(
                     item.elapsedMinutes
                   ) +
-                  ' 分鐘',
+                  ' minutes / 分鐘',
 
                 inline:
                   true
@@ -1111,13 +909,13 @@ async function checkOverdue() {
 
               {
                 name:
-                  '目前超時',
+                  'Overdue｜目前超時',
 
                 value:
                   String(
                     item.overdueMinutes
                   ) +
-                  ' 分鐘',
+                  ' minutes / 分鐘',
 
                 inline:
                   true
@@ -1127,7 +925,7 @@ async function checkOverdue() {
 
             .setFooter({
               text:
-                '26 GROUP ATTENDANCE｜自動超時監控'
+                '26 GROUP ATTENDANCE | AUTO MONITOR'
             });
 
 
@@ -1180,7 +978,6 @@ async function checkOverdue() {
       false;
 
   }
-
 }
 
 
@@ -1209,10 +1006,6 @@ client.once(
     );
 
 
-    /*
-     * 註冊 /attendance
-     */
-
     try {
 
       await registerCommands();
@@ -1226,17 +1019,6 @@ client.once(
 
     }
 
-
-    /*
-     * 清掉舊固定面板
-     */
-
-    await removeOldPanels();
-
-
-    /*
-     * 啟動後立即檢查一次超時
-     */
 
     await checkOverdue();
 
@@ -1381,11 +1163,6 @@ client.on(
 
 /*******************************************************
  * 16. Interaction
- *
- * 同時處理：
- *
- * A. /attendance
- * B. attendance 按鈕
  *******************************************************/
 
 client.on(
@@ -1398,7 +1175,7 @@ client.on(
 
 
     /***************************************************
-     * A. /attendance
+     * /attendance
      ***************************************************/
 
     if (
@@ -1459,11 +1236,15 @@ client.on(
 
           await interaction
             .editReply({
+
               content:
                 '❌ ' +
                 error.message
+
             })
-            .catch(() => {});
+            .catch(
+              () => {}
+            );
 
 
         } else {
@@ -1479,7 +1260,9 @@ client.on(
                 MessageFlags.Ephemeral
 
             })
-            .catch(() => {});
+            .catch(
+              () => {}
+            );
 
         }
 
@@ -1491,7 +1274,7 @@ client.on(
 
 
     /***************************************************
-     * B. Attendance Button
+     * Attendance Buttons
      ***************************************************/
 
     if (
@@ -1547,12 +1330,9 @@ client.on(
     );
 
 
-    /*
-     * Discord ACK
-     *
-     * 一定先 ACK，
-     * 避免「APP 未能及時回應」。
-     */
+    /***************************************************
+     * ACK FIRST
+     ***************************************************/
 
     try {
 
@@ -1646,7 +1426,7 @@ client.on(
 
 
       /*************************************************
-       * API Error
+       * API Failure
        *************************************************/
 
       if (
@@ -1658,10 +1438,10 @@ client.on(
 
             content:
 
-              '⚠️ ' +
+              '⚠️ **Attendance failed｜考勤操作失敗**\n\n' +
               (
                 result.message ||
-                'Attendance failed.'
+                'Please try again.｜請重新嘗試。'
               )
 
           });
@@ -1683,7 +1463,7 @@ client.on(
           .editReply({
 
             content:
-              '⚠️ This attendance action has already been recorded.'
+              '⚠️ This action has already been recorded.｜此操作已經記錄過。'
 
           });
 
@@ -1693,10 +1473,10 @@ client.on(
 
 
       /*************************************************
-       * Success Message
+       * Success
        *************************************************/
 
-      let englishAction =
+      const englishAction =
         BUTTONS[action]
           ?.label ||
         action;
@@ -1706,26 +1486,28 @@ client.on(
 
         '✅ **' +
         englishAction +
-        ' recorded successfully.**\n\n' +
+        '｜' +
+        result.action +
+        ' recorded successfully｜記錄成功**\n\n' +
 
-        'Company: **' +
+        'Company｜公司: **' +
         result.company +
         '**\n' +
 
-        'Employee: **' +
+        'Employee｜員工: **' +
         result.employee +
         '**\n' +
 
-        'Time: **' +
+        'Time｜時間: **' +
         result.date +
         ' ' +
         result.time +
         '**';
 
 
-      /*
-       * 離座開始
-       */
+      /*************************************************
+       * Away Start
+       *************************************************/
 
       if (
         action === 'TOILET' ||
@@ -1735,16 +1517,16 @@ client.on(
 
         content +=
 
-          '\nLimit: **' +
+          '\nTime Limit｜規定時間: **' +
           result.awayLimit +
-          ' minutes**';
+          ' minutes / 分鐘**';
 
       }
 
 
-      /*
-       * 回座
-       */
+      /*************************************************
+       * Back
+       *************************************************/
 
       if (
         action === 'BACK' &&
@@ -1753,9 +1535,9 @@ client.on(
 
         content +=
 
-          '\nAway Duration: **' +
+          '\nAway Duration｜離座時間: **' +
           result.durationMinutes +
-          ' minutes**';
+          ' minutes / 分鐘**';
 
 
         if (
@@ -1765,18 +1547,18 @@ client.on(
 
           content +=
 
-            '\nOverdue: **' +
+            '\nOverdue｜超時: **' +
             result.overdueMinutes +
-            ' minutes**';
+            ' minutes / 分鐘**';
 
         }
 
       }
 
 
-      /*
-       * 上班時顯示班次
-       */
+      /*************************************************
+       * Start Work
+       *************************************************/
 
       if (
         action === 'START' &&
@@ -1795,20 +1577,21 @@ client.on(
 
         content +=
 
-          '\nScheduled Start: **' +
+          '\nScheduled Start｜規定時間: **' +
           workStart +
           '**';
 
 
         if (
-          result.late === true
+          result.late ===
+          true
         ) {
 
           content +=
 
-            '\nLate: **' +
+            '\nLate｜遲到: **' +
             result.lateMinutes +
-            ' minutes**';
+            ' minutes / 分鐘**';
 
         }
 
@@ -1835,7 +1618,7 @@ client.on(
 
 
       /*************************************************
-       * Late Public Notice
+       * Public Late Notice
        *************************************************/
 
       if (
@@ -1866,12 +1649,13 @@ client.on(
 
           content:
 
-            '❌ ' +
+            '❌ **System Error｜系統錯誤**\n\n' +
+
             (
               error.name ===
                 'AbortError'
 
-                ? 'Connection timeout. Please contact an administrator to confirm the record.'
+                ? 'Connection timeout. Please contact an administrator to confirm the record.｜連線逾時，請聯絡管理員確認記錄。'
 
                 : error.message
             )
@@ -1920,11 +1704,6 @@ setInterval(
 
 /*******************************************************
  * 18. Gateway Watchdog
- *
- * 每 30 秒檢查 Discord Client。
- *
- * 3 分鐘沒有恢復：
- * 退出 Node → Render Restart
  *******************************************************/
 
 setInterval(
@@ -1936,8 +1715,7 @@ setInterval(
 
 
     const wsStatus =
-      client.ws
-        ?.status;
+      client.ws?.status;
 
 
     const isReady =
@@ -2127,7 +1905,7 @@ async function gracefulRestart(
  *******************************************************/
 
 console.log(
-  '[BOOT] 26 GROUP ATTENDANCE V2.3 STABLE'
+  '[BOOT] 26 GROUP ATTENDANCE V2.3.1 STABLE'
 );
 
 
