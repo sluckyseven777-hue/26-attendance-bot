@@ -13,7 +13,7 @@ const http = require('node:http');
 
 
 /*******************************************************
- * 26 GROUP ATTENDANCE BOT V2.1
+ * 26 GROUP ATTENDANCE BOT V2.2 STABLE
  *
  * LV / LT / MMC / LU
  *
@@ -21,11 +21,19 @@ const http = require('node:http');
  * 上廁所：15分鐘
  * 抽煙：7分鐘
  * 外賣：10分鐘
+ *
+ * V2.2：
+ * - Discord Gateway 狀態監控
+ * - Gateway 斷線自動恢復
+ * - 長時間失聯自動退出，交給 Render 重啟
+ * - Interaction 詳細診斷
+ * - Apps Script timeout
+ * - 超時監控防重疊
  *******************************************************/
 
 
 /*******************************************************
- * 1. Render 環境變數
+ * 1. Environment
  *******************************************************/
 
 const TOKEN = process.env.TOKEN;
@@ -33,13 +41,13 @@ const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
 const API_SECRET = process.env.API_SECRET;
 
 if (!TOKEN || !APPS_SCRIPT_URL || !API_SECRET) {
-  console.error('缺少必要的 Render 環境變數');
+  console.error('[FATAL] 缺少必要的 Render 環境變數');
   process.exit(1);
 }
 
 
 /*******************************************************
- * 2. 四個打卡頻道
+ * 2. Channels
  *******************************************************/
 
 const CHANNELS = {
@@ -51,13 +59,7 @@ const CHANNELS = {
 
 
 /*******************************************************
- * 3. 按鈕設定
- *
- * 第一排：
- * 上班 / 下班 / 回座
- *
- * 第二排：
- * 上廁所 / 抽煙 / 外賣
+ * 3. Buttons
  *******************************************************/
 
 const BUTTONS = {
@@ -106,7 +108,7 @@ const BUTTONS = {
 
 
 /*******************************************************
- * 4. Discord Client
+ * 4. Client
  *******************************************************/
 
 const client = new Client({
@@ -118,35 +120,73 @@ const client = new Client({
 
 
 /*******************************************************
- * 5. Render HTTP 健康檢查
+ * 5. Runtime State
  *******************************************************/
 
-const PORT = Number(
-  process.env.PORT || 10000
-);
+let discordReady = false;
+let lastReadyAt = 0;
+let lastGatewayActivity = Date.now();
 
-http.createServer((req, res) => {
-  res.writeHead(200, {
-    'Content-Type': 'text/plain; charset=utf-8'
-  });
+let checkingOverdue = false;
+let shuttingDown = false;
 
-  res.end(
-    '26 Group Attendance V2.1 online'
-  );
 
-}).listen(PORT, '0.0.0.0', () => {
-  console.log(
-    'HTTP server listening:',
-    PORT
-  );
-});
+/*
+ * Discord Gateway 如果斷線後長時間沒有恢復，
+ * 主動結束 Node，Render 會重新啟動服務。
+ *
+ * 不要設太短。
+ */
+const GATEWAY_RECOVERY_TIMEOUT =
+  3 * 60 * 1000;
 
 
 /*******************************************************
- * 6. 建立按鈕
+ * 6. HTTP Server
+ *******************************************************/
+
+const PORT =
+  Number(process.env.PORT || 10000);
+
+http.createServer((req, res) => {
+
+  const body = JSON.stringify({
+    service: '26 Group Attendance',
+    version: 'V2.2-STABLE',
+    http: 'ONLINE',
+    discord:
+      discordReady
+        ? 'READY'
+        : 'NOT_READY',
+    uptimeSeconds:
+      Math.floor(process.uptime())
+  });
+
+  res.writeHead(200, {
+    'Content-Type':
+      'application/json; charset=utf-8'
+  });
+
+  res.end(body);
+
+}).listen(
+  PORT,
+  '0.0.0.0',
+  () => {
+    console.log(
+      '[HTTP] listening:',
+      PORT
+    );
+  }
+);
+
+
+/*******************************************************
+ * 7. Helpers
  *******************************************************/
 
 function makeButton(item) {
+
   return new ButtonBuilder()
     .setCustomId(
       'attendance:' + item.id
@@ -157,73 +197,15 @@ function makeButton(item) {
 }
 
 
-/*******************************************************
- * 7. 建立面板
- *******************************************************/
+function getEmployeeName(interaction) {
 
-function createPanel() {
-
-  const embed = new EmbedBuilder()
-    .setColor(0x38A58A)
-
-    .setTitle(
-      '📋 26 GROUP｜員工考勤'
-    )
-
-    .setDescription(
-      '**上班考勤**\n' +
-      '🟢 上班　09:00 前完成打卡\n' +
-      '🔴 下班　結束當日工作\n' +
-      '🪑 回座　結束目前離座\n\n' +
-
-      '**離座時間**\n' +
-      '🚻 上廁所　15 分鐘\n' +
-      '🚬 抽煙　7 分鐘\n' +
-      '🥡 外賣　10 分鐘\n\n' +
-
-      '⚠️ 09:00 後上班將記錄遲到\n' +
-      '⚠️ 離座超時將自動公開通報\n\n' +
-
-      '🕒 Malaysia Time'
-    )
-
-    .setFooter({
-      text:
-        '26 GROUP ATTENDANCE｜V2.1'
-    });
-
-
-  // 第一排：3 個
-  const row1 = new ActionRowBuilder()
-    .addComponents(
-      makeButton(BUTTONS.START),
-      makeButton(BUTTONS.OFF),
-      makeButton(BUTTONS.BACK)
-    );
-
-
-  // 第二排：3 個
-  const row2 = new ActionRowBuilder()
-    .addComponents(
-      makeButton(BUTTONS.TOILET),
-      makeButton(BUTTONS.SMOKE),
-      makeButton(BUTTONS.TAKEAWAY)
-    );
-
-
-  return {
-    embeds: [embed],
-    components: [
-      row1,
-      row2
-    ]
-  };
+  return (
+    interaction.member?.displayName ||
+    interaction.user.globalName ||
+    interaction.user.username
+  );
 }
 
-
-/*******************************************************
- * 8. 頻道 → 公司
- *******************************************************/
 
 function getCompany(interaction) {
 
@@ -253,21 +235,73 @@ function getCompany(interaction) {
 
 
 /*******************************************************
- * 9. Employee Name
+ * 8. Panel
  *******************************************************/
 
-function getEmployeeName(interaction) {
+function createPanel() {
 
-  return (
-    interaction.member?.displayName ||
-    interaction.user.globalName ||
-    interaction.user.username
-  );
+  const embed =
+    new EmbedBuilder()
+
+      .setColor(0x38A58A)
+
+      .setTitle(
+        '📋 26 GROUP｜員工考勤'
+      )
+
+      .setDescription(
+        '**上班考勤**\n' +
+        '🟢 上班　09:00 前完成打卡\n' +
+        '🔴 下班　結束當日工作\n' +
+        '🪑 回座　結束目前離座\n\n' +
+
+        '**離座時間**\n' +
+        '🚻 上廁所　15 分鐘\n' +
+        '🚬 抽煙　7 分鐘\n' +
+        '🥡 外賣　10 分鐘\n\n' +
+
+        '⚠️ 09:00 後上班將記錄遲到\n' +
+        '⚠️ 離座超時將自動公開通報\n\n' +
+
+        '🕒 Malaysia Time'
+      )
+
+      .setFooter({
+        text:
+          '26 GROUP ATTENDANCE｜V2.2'
+      });
+
+
+  const row1 =
+    new ActionRowBuilder()
+      .addComponents(
+        makeButton(BUTTONS.START),
+        makeButton(BUTTONS.OFF),
+        makeButton(BUTTONS.BACK)
+      );
+
+
+  const row2 =
+    new ActionRowBuilder()
+      .addComponents(
+        makeButton(BUTTONS.TOILET),
+        makeButton(BUTTONS.SMOKE),
+        makeButton(BUTTONS.TAKEAWAY)
+      );
+
+
+  return {
+    embeds: [embed],
+    components: [
+      row1,
+      row2
+    ]
+  };
 }
 
 
 /*******************************************************
- * 10. Apps Script API
+ * 9. Apps Script API
  *******************************************************/
 
 async function sendAttendance(data) {
@@ -276,36 +310,38 @@ async function sendAttendance(data) {
     new AbortController();
 
   const timeout =
-    setTimeout(() => {
-      controller.abort();
-    }, 25000);
-
+    setTimeout(
+      () => controller.abort(),
+      25000
+    );
 
   try {
 
-    const response = await fetch(
-      APPS_SCRIPT_URL,
-      {
-        method: 'POST',
+    const response =
+      await fetch(
+        APPS_SCRIPT_URL,
+        {
+          method: 'POST',
 
-        headers: {
-          'Content-Type':
-            'text/plain;charset=utf-8'
-        },
+          headers: {
+            'Content-Type':
+              'text/plain;charset=utf-8'
+          },
 
-        body: JSON.stringify({
-          ...data,
-          secret: API_SECRET
-        }),
+          body: JSON.stringify({
+            ...data,
+            secret: API_SECRET
+          }),
 
-        redirect: 'follow',
+          redirect: 'follow',
 
-        signal: controller.signal
-      }
-    );
+          signal: controller.signal
+        }
+      );
 
 
     if (!response.ok) {
+
       throw new Error(
         'Google API HTTP ' +
         response.status
@@ -316,12 +352,15 @@ async function sendAttendance(data) {
     const text =
       await response.text();
 
+
     try {
+
       return JSON.parse(text);
 
     } catch {
+
       console.error(
-        'Google 回傳非 JSON：',
+        '[API NON JSON]',
         text.slice(0, 300)
       );
 
@@ -331,13 +370,14 @@ async function sendAttendance(data) {
     }
 
   } finally {
+
     clearTimeout(timeout);
   }
 }
 
 
 /*******************************************************
- * 11. 更新 Discord 面板
+ * 10. Setup Panels
  *******************************************************/
 
 async function setupPanels() {
@@ -361,8 +401,9 @@ async function setupPanels() {
       ) {
 
         console.error(
+          '[PANEL]',
           company,
-          '不是可用的文字頻道'
+          '不是文字頻道'
         );
 
         continue;
@@ -400,7 +441,10 @@ async function setupPanels() {
                   '26 GROUP ATTENDANCE PANEL V2' ||
 
                 footer ===
-                  '26 GROUP ATTENDANCE｜V2.1'
+                  '26 GROUP ATTENDANCE｜V2.1' ||
+
+                footer ===
+                  '26 GROUP ATTENDANCE｜V2.2'
               );
             }
           );
@@ -414,8 +458,9 @@ async function setupPanels() {
         );
 
         console.log(
+          '[PANEL]',
           company,
-          '沿用現有打卡面板'
+          '沿用現有面板'
         );
 
       } else {
@@ -425,16 +470,17 @@ async function setupPanels() {
         );
 
         console.log(
+          '[PANEL]',
           company,
-          '已建立打卡面板'
+          '建立新面板'
         );
       }
 
     } catch (error) {
 
       console.error(
+        '[PANEL ERROR]',
         company,
-        '建立面板失敗：',
         error.message
       );
     }
@@ -443,7 +489,7 @@ async function setupPanels() {
 
 
 /*******************************************************
- * 12. 遲到公開通報
+ * 11. Late Notice
  *******************************************************/
 
 async function sendLateNotice(
@@ -455,6 +501,7 @@ async function sendLateNotice(
 
     const channel =
       interaction.channel;
+
 
     if (
       !channel ||
@@ -523,7 +570,7 @@ async function sendLateNotice(
 
 
     console.log(
-      '遲到通報：',
+      '[LATE]',
       result.company,
       result.employee,
       result.lateMinutes +
@@ -533,7 +580,7 @@ async function sendLateNotice(
   } catch (error) {
 
     console.error(
-      '遲到通報發送失敗：',
+      '[LATE ERROR]',
       error.message
     );
   }
@@ -541,17 +588,18 @@ async function sendLateNotice(
 
 
 /*******************************************************
- * 13. 離座超時檢查
+ * 12. Overdue Check
  *******************************************************/
-
-let checkingOverdue = false;
-
 
 async function checkOverdue() {
 
-  if (checkingOverdue) {
+  if (
+    checkingOverdue ||
+    !discordReady
+  ) {
     return;
   }
+
 
   checkingOverdue = true;
 
@@ -568,7 +616,7 @@ async function checkOverdue() {
     if (!result.ok) {
 
       console.error(
-        '超時檢查失敗：',
+        '[OVERDUE API ERROR]',
         result.message
       );
 
@@ -600,7 +648,7 @@ async function checkOverdue() {
         if (!channelId) {
 
           console.error(
-            '超時通報找不到公司頻道：',
+            '[OVERDUE CHANNEL ERROR]',
             item.company
           );
 
@@ -641,9 +689,7 @@ async function checkOverdue() {
               {
                 name: '公司',
                 value:
-                  String(
-                    item.company
-                  ),
+                  String(item.company),
                 inline: true
               },
 
@@ -702,20 +748,13 @@ async function checkOverdue() {
             });
 
 
-        /*
-         * 不再另外使用 content: <@ID>
-         *
-         * Embed 裡面的 mention 已經足夠，
-         * 避免畫面出現兩次 @員工。
-         */
-
         await channel.send({
           embeds: [embed]
         });
 
 
         console.log(
-          '離座超時通報：',
+          '[OVERDUE]',
           item.company,
           item.employee,
           item.awayLabel,
@@ -726,7 +765,7 @@ async function checkOverdue() {
       } catch (error) {
 
         console.error(
-          '發送超時通報失敗：',
+          '[OVERDUE SEND ERROR]',
           error.message
         );
       }
@@ -735,7 +774,7 @@ async function checkOverdue() {
   } catch (error) {
 
     console.error(
-      '自動超時檢查錯誤：',
+      '[OVERDUE ERROR]',
       error.name === 'AbortError'
         ? 'Google API timeout'
         : error.message
@@ -749,15 +788,24 @@ async function checkOverdue() {
 
 
 /*******************************************************
- * 14. Bot Ready
+ * 13. Discord Ready
  *******************************************************/
 
 client.once(
   Events.ClientReady,
   async readyClient => {
 
+    discordReady = true;
+
+    lastReadyAt =
+      Date.now();
+
+    lastGatewayActivity =
+      Date.now();
+
+
     console.log(
-      '考勤 Bot 已上線：',
+      '[GATEWAY READY]',
       readyClient.user.tag
     );
 
@@ -768,14 +816,123 @@ client.once(
     await checkOverdue();
 
 
-    setInterval(
-      checkOverdue,
-      60 * 1000
+    console.log(
+      '[MONITOR] 離座超時監控啟動'
     );
+  }
+);
+
+
+/*******************************************************
+ * 14. Gateway Monitoring
+ *******************************************************/
+
+client.on(
+  'shardReady',
+  shardId => {
+
+    discordReady = true;
+
+    lastReadyAt =
+      Date.now();
+
+    lastGatewayActivity =
+      Date.now();
 
 
     console.log(
-      '離座超時監控已啟動：每 60 秒檢查'
+      '[SHARD READY]',
+      shardId
+    );
+  }
+);
+
+
+client.on(
+  'shardResume',
+  (
+    shardId,
+    replayedEvents
+  ) => {
+
+    discordReady = true;
+
+    lastGatewayActivity =
+      Date.now();
+
+
+    console.log(
+      '[GATEWAY RESUMED]',
+      'Shard:',
+      shardId,
+      'Replayed:',
+      replayedEvents
+    );
+  }
+);
+
+
+client.on(
+  'shardDisconnect',
+  (
+    event,
+    shardId
+  ) => {
+
+    discordReady = false;
+
+    lastGatewayActivity =
+      Date.now();
+
+
+    console.error(
+      '[GATEWAY DISCONNECT]',
+      'Shard:',
+      shardId,
+      'Code:',
+      event?.code,
+      'Reason:',
+      event?.reason || ''
+    );
+  }
+);
+
+
+client.on(
+  'shardReconnecting',
+  shardId => {
+
+    discordReady = false;
+
+    lastGatewayActivity =
+      Date.now();
+
+
+    console.log(
+      '[GATEWAY RECONNECTING]',
+      'Shard:',
+      shardId
+    );
+  }
+);
+
+
+client.on(
+  'shardError',
+  (
+    error,
+    shardId
+  ) => {
+
+    lastGatewayActivity =
+      Date.now();
+
+
+    console.error(
+      '[GATEWAY ERROR]',
+      'Shard:',
+      shardId,
+      error.message
     );
   }
 );
@@ -788,6 +945,10 @@ client.once(
 client.on(
   Events.InteractionCreate,
   async interaction => {
+
+    lastGatewayActivity =
+      Date.now();
+
 
     if (!interaction.isButton()) {
       return;
@@ -814,19 +975,18 @@ client.on(
     }
 
 
-    /*
-     * 非常重要：
-     * 一收到 Discord interaction
-     * 馬上寫入 Render Log。
-     */
+    const employee =
+      getEmployeeName(
+        interaction
+      );
+
 
     console.log(
       '[CLICK]',
-      new Date().toISOString(),
       'User:',
       interaction.user.id,
       'Name:',
-      getEmployeeName(interaction),
+      employee,
       'Channel:',
       interaction.channelId,
       'Action:',
@@ -837,9 +997,8 @@ client.on(
 
 
     /*
-     * 第一時間 ACK Discord
+     * Discord ACK
      */
-
     try {
 
       await interaction.deferReply({
@@ -851,8 +1010,7 @@ client.on(
       console.log(
         '[ACK]',
         interaction.id,
-        action,
-        'Discord 已確認'
+        action
       );
 
     } catch (error) {
@@ -876,12 +1034,6 @@ client.on(
         );
 
 
-      const employee =
-        getEmployeeName(
-          interaction
-        );
-
-
       console.log(
         '[API START]',
         interaction.id,
@@ -893,7 +1045,6 @@ client.on(
 
       const result =
         await sendAttendance({
-
           eventId:
             interaction.id,
 
@@ -915,21 +1066,12 @@ client.on(
         '[API RESULT]',
         interaction.id,
         JSON.stringify({
-          ok:
-            result.ok,
-
-          code:
-            result.code,
-
-          message:
-            result.message
+          ok: result.ok,
+          code: result.code,
+          message: result.message
         })
       );
 
-
-      /*
-       * Apps Script 拒絕
-       */
 
       if (!result.ok) {
 
@@ -946,10 +1088,6 @@ client.on(
       }
 
 
-      /*
-       * 重複事件
-       */
-
       if (result.duplicate) {
 
         await interaction.editReply({
@@ -960,10 +1098,6 @@ client.on(
         return;
       }
 
-
-      /*
-       * 成功私人回覆
-       */
 
       let content =
         '✅ **' +
@@ -984,10 +1118,6 @@ client.on(
         result.time;
 
 
-      /*
-       * 離座開始
-       */
-
       if (
         action === 'TOILET' ||
         action === 'SMOKE' ||
@@ -1000,10 +1130,6 @@ client.on(
           ' 分鐘';
       }
 
-
-      /*
-       * 回座
-       */
 
       if (
         action === 'BACK' &&
@@ -1042,10 +1168,6 @@ client.on(
         result.time
       );
 
-
-      /*
-       * 遲到公開通報
-       */
 
       if (
         action === 'START' &&
@@ -1093,7 +1215,115 @@ client.on(
 
 
 /*******************************************************
- * 16. Discord 錯誤監控
+ * 16. 每分鐘工作
+ *******************************************************/
+
+setInterval(
+  async () => {
+
+    if (discordReady) {
+
+      await checkOverdue();
+    }
+
+  },
+  60 * 1000
+);
+
+
+/*******************************************************
+ * 17. Gateway Watchdog
+ *
+ * 每 30 秒檢查 Discord Client 狀態。
+ *
+ * 如果 Discord 明確不是 Ready，
+ * 且超過 3 分鐘仍沒有恢復，
+ * 主動退出。
+ *
+ * Render 會依服務設定重新啟動 Node。
+ *******************************************************/
+
+setInterval(
+  () => {
+
+    const now =
+      Date.now();
+
+
+    const wsStatus =
+      client.ws?.status;
+
+
+    const isReady =
+      client.isReady();
+
+
+    console.log(
+      '[HEARTBEAT]',
+      'Discord:',
+      isReady
+        ? 'READY'
+        : 'NOT_READY',
+      'WS:',
+      wsStatus,
+      'Uptime:',
+      Math.floor(
+        process.uptime()
+      ) + 's'
+    );
+
+
+    if (isReady) {
+
+      discordReady = true;
+
+      lastGatewayActivity =
+        now;
+
+      return;
+    }
+
+
+    discordReady = false;
+
+
+    const downFor =
+      now -
+      lastGatewayActivity;
+
+
+    console.error(
+      '[GATEWAY NOT READY]',
+      'Down:',
+      Math.floor(
+        downFor / 1000
+      ),
+      'seconds'
+    );
+
+
+    if (
+      downFor >=
+      GATEWAY_RECOVERY_TIMEOUT
+    ) {
+
+      console.error(
+        '[FATAL] Discord Gateway 超過 3 分鐘未恢復，重新啟動服務'
+      );
+
+
+      gracefulRestart(
+        'Gateway recovery timeout'
+      );
+    }
+
+  },
+  30 * 1000
+);
+
+
+/*******************************************************
+ * 18. Discord Client Error
  *******************************************************/
 
 client.on(
@@ -1109,7 +1339,7 @@ client.on(
 
 
 /*******************************************************
- * 17. Node 錯誤監控
+ * 19. Node Error
  *******************************************************/
 
 process.on(
@@ -1137,7 +1367,66 @@ process.on(
 
 
 /*******************************************************
- * 18. Login
+ * 20. Graceful Restart
  *******************************************************/
 
-client.login(TOKEN);
+async function gracefulRestart(
+  reason
+) {
+
+  if (shuttingDown) {
+    return;
+  }
+
+
+  shuttingDown = true;
+
+
+  console.error(
+    '[RESTART]',
+    reason
+  );
+
+
+  try {
+
+    client.destroy();
+
+  } catch (error) {
+
+    console.error(
+      '[DESTROY ERROR]',
+      error.message
+    );
+  }
+
+
+  setTimeout(
+    () => {
+
+      process.exit(1);
+
+    },
+    1500
+  );
+}
+
+
+/*******************************************************
+ * 21. Login
+ *******************************************************/
+
+console.log(
+  '[BOOT] 26 GROUP ATTENDANCE V2.2 STABLE'
+);
+
+client.login(TOKEN)
+  .catch(error => {
+
+    console.error(
+      '[LOGIN FAILED]',
+      error
+    );
+
+    process.exit(1);
+  });
