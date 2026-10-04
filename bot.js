@@ -70,8 +70,15 @@ if (
  * 2. DISCORD SERVER
  *******************************************************/
 
-const GUILD_ID =
-  '1477226931941539973';
+const GUILD_IDS = {
+
+  HQ:
+    '1477226931941539973',
+
+  PERFORMANCE:
+    '1477222461001961565'
+
+};
 
 
 /*******************************************************
@@ -80,6 +87,7 @@ const GUILD_ID =
 
 const CHANNELS = {
 
+  // 26 總群
   LV:
     '1536948264954236998',
 
@@ -90,7 +98,14 @@ const CHANNELS = {
     '1554087319450030140',
 
   LU:
-    '1554087992279433266'
+    '1554087992279433266',
+
+  // 鑫晨 - 業績組 Server
+  'XINCHEN-SG':
+    '1556182422062768208',
+
+  'XINCHEN-IRL':
+    '1555872602541662268'
 
 };
 
@@ -375,7 +390,7 @@ function createAttendancePanel(
 
       .setFooter({
         text:
-          '26 GROUP ATTENDANCE | V2.4'
+          '26 GROUP ATTENDANCE | V2.5'
       });
 
 
@@ -548,7 +563,7 @@ async function registerCommands() {
 
   /*****************************************************
    * STEP 1
-   * 清除以前残留的 GLOBAL commands
+   * 清除以前殘留的 GLOBAL commands
    *****************************************************/
 
   try {
@@ -568,9 +583,7 @@ async function registerCommands() {
         '[COMMAND CLEANUP] Removing old GLOBAL commands...'
       );
 
-
       await client.application.commands.set([]);
-
 
       console.log(
         '[COMMAND CLEANUP] GLOBAL commands cleared'
@@ -596,14 +609,8 @@ async function registerCommands() {
 
   /*****************************************************
    * STEP 2
-   * 只在 26總群 注册 /attendance
+   * 建立 /attendance command
    *****************************************************/
-
-  const guild =
-    await client.guilds.fetch(
-      GUILD_ID
-    );
-
 
   const command =
     new SlashCommandBuilder()
@@ -617,18 +624,57 @@ async function registerCommands() {
       );
 
 
-  await guild.commands.set([
+  /*****************************************************
+   * STEP 3
+   * 註冊到 26 總群
+   *****************************************************/
+
+  const hqGuild =
+    await client.guilds.fetch(
+      GUILD_IDS.HQ
+    );
+
+
+  await hqGuild.commands.set([
     command.toJSON()
   ]);
 
 
   console.log(
-    '[COMMAND] /attendance registered ONLY to guild:',
-    guild.name,
-    '(' + GUILD_ID + ')'
+    '[COMMAND] /attendance registered to guild:',
+    hqGuild.name,
+    '(' + GUILD_IDS.HQ + ')'
   );
-}
 
+
+  /*****************************************************
+   * STEP 4
+   * 註冊到 業績組 Server
+   *****************************************************/
+
+  const performanceGuild =
+    await client.guilds.fetch(
+      GUILD_IDS.PERFORMANCE
+    );
+
+
+  await performanceGuild.commands.set([
+    command.toJSON()
+  ]);
+
+
+  console.log(
+    '[COMMAND] /attendance registered to guild:',
+    performanceGuild.name,
+    '(' + GUILD_IDS.PERFORMANCE + ')'
+  );
+
+
+  console.log(
+    '[COMMAND] /attendance registration completed for 2 guilds'
+  );
+
+}
 
 /*******************************************************
  * 12. LATE NOTICE
@@ -1973,7 +2019,7 @@ function gracefulRestart(
  *******************************************************/
 
 console.log(
-  '[BOOT] 26 GROUP ATTENDANCE V2.4 STABLE'
+  '[BOOT] 26 GROUP ATTENDANCE V2.5 XINCHEN STABLE'
 );
 
 
