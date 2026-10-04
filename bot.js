@@ -546,6 +546,59 @@ async function sendAttendance(
 
 async function registerCommands() {
 
+  /*****************************************************
+   * STEP 1
+   * 清除以前残留的 GLOBAL commands
+   *****************************************************/
+
+  try {
+
+    const globalCommands =
+      await client.application.commands.fetch();
+
+    console.log(
+      '[GLOBAL COMMANDS]',
+      globalCommands.map(cmd => cmd.name)
+    );
+
+
+    if (globalCommands.size > 0) {
+
+      console.log(
+        '[COMMAND CLEANUP] Removing old GLOBAL commands...'
+      );
+
+
+      await client.application.commands.set([]);
+
+
+      console.log(
+        '[COMMAND CLEANUP] GLOBAL commands cleared'
+      );
+
+    } else {
+
+      console.log(
+        '[COMMAND CLEANUP] No GLOBAL commands found'
+      );
+
+    }
+
+  } catch (error) {
+
+    console.error(
+      '[COMMAND CLEANUP ERROR]',
+      error.message
+    );
+
+  }
+
+
+  /*****************************************************
+   * STEP 2
+   * 只在 26總群 注册 /attendance
+   *****************************************************/
+
   const guild =
     await client.guilds.fetch(
       GUILD_ID
@@ -570,7 +623,7 @@ async function registerCommands() {
 
 
   console.log(
-    '[COMMAND] /attendance registered to guild:',
+    '[COMMAND] /attendance registered ONLY to guild:',
     guild.name,
     '(' + GUILD_ID + ')'
   );
