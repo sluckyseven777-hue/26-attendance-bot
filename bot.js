@@ -14,28 +14,32 @@ const http = require('node:http');
 
 
 /*******************************************************
- * 26 GROUP ATTENDANCE BOT V2.3.2 STABLE
+ * 26 GROUP ATTENDANCE BOT V2.4 STABLE
  *
- * FIX:
+ * LONG-RUN VERSION
+ *
  * - /attendance FIRST ACK
  * - Button FIRST ACK
+ * - Guild Slash Command
  * - Private attendance panel
  * - Bilingual messages
- * - Gateway watchdog
+ * - Gateway reconnect monitoring
+ * - Automatic Render restart on confirmed prolonged outage
+ * - Apps Script timeout protection
+ * - Overdue monitor
  *
- * WORK SCHEDULE:
- * Controlled by Apps Script
+ * WORK SCHEDULE IS CONTROLLED BY APPS SCRIPT:
  *
  * LV / LT / MMC = 09:00
  * LU = 13:00
  *
  * Future:
- * XINCHEN can use another schedule.
+ * XINCHEN / SG / IRL can use separate schedules.
  *******************************************************/
 
 
 /*******************************************************
- * 1. Environment
+ * 1. ENVIRONMENT
  *******************************************************/
 
 const TOKEN =
@@ -63,7 +67,7 @@ if (
 
 
 /*******************************************************
- * 2. Discord Server
+ * 2. DISCORD SERVER
  *******************************************************/
 
 const GUILD_ID =
@@ -71,7 +75,7 @@ const GUILD_ID =
 
 
 /*******************************************************
- * 3. Attendance Channels
+ * 3. ATTENDANCE CHANNELS
  *******************************************************/
 
 const CHANNELS = {
@@ -92,7 +96,7 @@ const CHANNELS = {
 
 
 /*******************************************************
- * 4. Buttons
+ * 4. BUTTONS
  *******************************************************/
 
 const BUTTONS = {
@@ -143,7 +147,7 @@ const BUTTONS = {
 
 
 /*******************************************************
- * 5. Discord Client
+ * 5. DISCORD CLIENT
  *******************************************************/
 
 const client =
@@ -158,14 +162,14 @@ const client =
 
 
 /*******************************************************
- * 6. Runtime State
+ * 6. RUNTIME STATE
  *******************************************************/
 
 let discordReady =
   false;
 
-let lastGatewayActivity =
-  Date.now();
+let gatewayDownSince =
+  null;
 
 let checkingOverdue =
   false;
@@ -174,12 +178,20 @@ let shuttingDown =
   false;
 
 
-const GATEWAY_RECOVERY_TIMEOUT =
+/*
+ * Discord 已經明確 NOT READY，
+ * 並且連續 3 分鐘沒有恢復，
+ * 才讓 Render 重啟。
+ *
+ * 不會因為「沒人打卡」而重啟。
+ */
+
+const GATEWAY_FAILURE_LIMIT =
   3 * 60 * 1000;
 
 
 /*******************************************************
- * 7. HTTP Server
+ * 7. HTTP HEALTH SERVER
  *******************************************************/
 
 const PORT =
@@ -200,15 +212,18 @@ http
             '26 Group Attendance',
 
           version:
-            'V2.3.2-STABLE',
+            'V2.4-STABLE',
 
           http:
             'ONLINE',
 
           discord:
-            discordReady
+            client.isReady()
               ? 'READY'
               : 'NOT_READY',
+
+          wsStatus:
+            client.ws?.status,
 
           uptimeSeconds:
             Math.floor(
@@ -246,7 +261,7 @@ http
 
 
 /*******************************************************
- * 8. Helpers
+ * 8. HELPERS
  *******************************************************/
 
 function makeButton(item) {
@@ -314,7 +329,7 @@ function getCompany(
 
 
 /*******************************************************
- * 9. Attendance Panel
+ * 9. ATTENDANCE PANEL
  *******************************************************/
 
 function createAttendancePanel(
@@ -360,7 +375,7 @@ function createAttendancePanel(
 
       .setFooter({
         text:
-          '26 GROUP ATTENDANCE | V2.3.2'
+          '26 GROUP ATTENDANCE | V2.4'
       });
 
 
@@ -420,7 +435,7 @@ function createAttendancePanel(
 
 
 /*******************************************************
- * 10. Apps Script API
+ * 10. APPS SCRIPT API
  *******************************************************/
 
 async function sendAttendance(
@@ -433,8 +448,9 @@ async function sendAttendance(
 
   const timeout =
     setTimeout(
-      () =>
-        controller.abort(),
+      () => {
+        controller.abort();
+      },
       25000
     );
 
@@ -511,7 +527,6 @@ async function sendAttendance(
       throw new Error(
         'Google API response format error'
       );
-
     }
 
 
@@ -526,7 +541,7 @@ async function sendAttendance(
 
 
 /*******************************************************
- * 11. Register /attendance
+ * 11. REGISTER /attendance
  *******************************************************/
 
 async function registerCommands() {
@@ -563,7 +578,7 @@ async function registerCommands() {
 
 
 /*******************************************************
- * 12. Late Notice
+ * 12. LATE NOTICE
  *******************************************************/
 
 async function sendLateNotice(
@@ -715,14 +730,14 @@ async function sendLateNotice(
 
 
 /*******************************************************
- * 13. Overdue Check
+ * 13. OVERDUE CHECK
  *******************************************************/
 
 async function checkOverdue() {
 
   if (
     checkingOverdue ||
-    !discordReady
+    !client.isReady()
   ) {
 
     return;
@@ -976,7 +991,7 @@ async function checkOverdue() {
 
 
 /*******************************************************
- * 14. Discord Ready
+ * 14. READY
  *******************************************************/
 
 client.once(
@@ -987,8 +1002,8 @@ client.once(
     discordReady =
       true;
 
-    lastGatewayActivity =
-      Date.now();
+    gatewayDownSince =
+      null;
 
 
     console.log(
@@ -1023,7 +1038,7 @@ client.once(
 
 
 /*******************************************************
- * 15. Gateway Events
+ * 15. GATEWAY EVENTS
  *******************************************************/
 
 client.on(
@@ -1034,8 +1049,8 @@ client.on(
     discordReady =
       true;
 
-    lastGatewayActivity =
-      Date.now();
+    gatewayDownSince =
+      null;
 
 
     console.log(
@@ -1058,8 +1073,8 @@ client.on(
     discordReady =
       true;
 
-    lastGatewayActivity =
-      Date.now();
+    gatewayDownSince =
+      null;
 
 
     console.log(
@@ -1085,8 +1100,16 @@ client.on(
     discordReady =
       false;
 
-    lastGatewayActivity =
-      Date.now();
+
+    if (
+      gatewayDownSince ===
+      null
+    ) {
+
+      gatewayDownSince =
+        Date.now();
+
+    }
 
 
     console.error(
@@ -1112,8 +1135,16 @@ client.on(
     discordReady =
       false;
 
-    lastGatewayActivity =
-      Date.now();
+
+    if (
+      gatewayDownSince ===
+      null
+    ) {
+
+      gatewayDownSince =
+        Date.now();
+
+    }
 
 
     console.log(
@@ -1134,10 +1165,6 @@ client.on(
     shardId
   ) => {
 
-    lastGatewayActivity =
-      Date.now();
-
-
     console.error(
       '[GATEWAY ERROR]',
       'Shard:',
@@ -1150,7 +1177,7 @@ client.on(
 
 
 /*******************************************************
- * 16. Interaction Handler
+ * 16. INTERACTIONS
  *******************************************************/
 
 client.on(
@@ -1158,15 +1185,9 @@ client.on(
 
   async interaction => {
 
-    lastGatewayActivity =
-      Date.now();
-
 
     /***************************************************
-     * A. /attendance
-     *
-     * IMPORTANT:
-     * FIRST ACK DISCORD
+     * /attendance
      ***************************************************/
 
     if (
@@ -1188,12 +1209,7 @@ client.on(
 
 
       /*
-       * FIRST ACK.
-       *
-       * Do this BEFORE:
-       * - getCompany()
-       * - building embed
-       * - any API
+       * FIRST ACK
        */
 
       try {
@@ -1274,15 +1290,7 @@ client.on(
 
           })
           .catch(
-            error2 => {
-
-              console.error(
-                '[COMMAND EDIT ERROR]',
-                interaction.id,
-                error2.message
-              );
-
-            }
+            () => {}
           );
 
       }
@@ -1293,7 +1301,7 @@ client.on(
 
 
     /***************************************************
-     * B. Attendance Buttons
+     * BUTTONS
      ***************************************************/
 
     if (
@@ -1443,10 +1451,6 @@ client.on(
       );
 
 
-      /*************************************************
-       * API Failure
-       *************************************************/
-
       if (
         !result.ok
       ) {
@@ -1468,10 +1472,6 @@ client.on(
       }
 
 
-      /*************************************************
-       * Duplicate
-       *************************************************/
-
       if (
         result.duplicate
       ) {
@@ -1487,10 +1487,6 @@ client.on(
         return;
       }
 
-
-      /*************************************************
-       * Success
-       *************************************************/
 
       const englishAction =
         BUTTONS[action]?.label ||
@@ -1520,10 +1516,6 @@ client.on(
         '**';
 
 
-      /*************************************************
-       * Away Start
-       *************************************************/
-
       if (
         action === 'TOILET' ||
         action === 'SMOKE' ||
@@ -1538,10 +1530,6 @@ client.on(
 
       }
 
-
-      /*************************************************
-       * Back
-       *************************************************/
 
       if (
         action === 'BACK' &&
@@ -1569,10 +1557,6 @@ client.on(
 
       }
 
-
-      /*************************************************
-       * Start Work
-       *************************************************/
 
       if (
         action === 'START' &&
@@ -1629,10 +1613,6 @@ client.on(
       );
 
 
-      /*************************************************
-       * Public Late Notice
-       *************************************************/
-
       if (
         action === 'START' &&
         result.late === true
@@ -1674,15 +1654,7 @@ client.on(
 
         })
         .catch(
-          error2 => {
-
-            console.error(
-              '[EDIT REPLY FAILED]',
-              interaction.id,
-              error2.message
-            );
-
-          }
+          () => {}
         );
 
     }
@@ -1692,7 +1664,7 @@ client.on(
 
 
 /*******************************************************
- * 17. Overdue Monitor
+ * 17. OVERDUE MONITOR
  *******************************************************/
 
 setInterval(
@@ -1700,7 +1672,7 @@ setInterval(
   async () => {
 
     if (
-      discordReady
+      client.isReady()
     ) {
 
       await checkOverdue();
@@ -1715,29 +1687,25 @@ setInterval(
 
 
 /*******************************************************
- * 18. Gateway Watchdog
+ * 18. GATEWAY WATCHDOG
  *******************************************************/
 
 setInterval(
 
   () => {
 
-    const now =
-      Date.now();
+    const ready =
+      client.isReady();
 
 
     const wsStatus =
       client.ws?.status;
 
 
-    const isReady =
-      client.isReady();
-
-
     console.log(
       '[HEARTBEAT]',
       'Discord:',
-      isReady
+      ready
         ? 'READY'
         : 'NOT_READY',
       'WS:',
@@ -1750,32 +1718,57 @@ setInterval(
     );
 
 
+    /*
+     * 正常：
+     * 即使一整晚沒有人打卡，也完全不處理。
+     */
+
     if (
-      isReady
+      ready
     ) {
 
       discordReady =
         true;
 
-      lastGatewayActivity =
-        now;
+      gatewayDownSince =
+        null;
 
       return;
     }
 
 
+    /*
+     * Discord 明確 NOT READY
+     */
+
     discordReady =
       false;
 
 
+    if (
+      gatewayDownSince ===
+      null
+    ) {
+
+      gatewayDownSince =
+        Date.now();
+
+
+      console.error(
+        '[WATCHDOG] Discord entered NOT_READY state'
+      );
+
+    }
+
+
     const downFor =
-      now -
-      lastGatewayActivity;
+      Date.now() -
+      gatewayDownSince;
 
 
     console.error(
-      '[GATEWAY NOT READY]',
-      'Down:',
+      '[WATCHDOG]',
+      'Discord unavailable for',
       Math.floor(
         downFor /
         1000
@@ -1784,18 +1777,25 @@ setInterval(
     );
 
 
+    /*
+     * 連續 3 分鐘沒有恢復：
+     * 退出 Node。
+     *
+     * Render 會依照服務設定重新啟動 process。
+     */
+
     if (
       downFor >=
-      GATEWAY_RECOVERY_TIMEOUT
+      GATEWAY_FAILURE_LIMIT
     ) {
 
       console.error(
-        '[FATAL] Discord Gateway unavailable for more than 3 minutes'
+        '[WATCHDOG RESTART] Discord Gateway did not recover'
       );
 
 
       gracefulRestart(
-        'Gateway recovery timeout'
+        'Discord Gateway recovery timeout'
       );
 
     }
@@ -1808,7 +1808,7 @@ setInterval(
 
 
 /*******************************************************
- * 19. Discord Client Error
+ * 19. DISCORD ERROR
  *******************************************************/
 
 client.on(
@@ -1826,7 +1826,7 @@ client.on(
 
 
 /*******************************************************
- * 20. Node Errors
+ * 20. NODE ERRORS
  *******************************************************/
 
 process.on(
@@ -1858,10 +1858,10 @@ process.on(
 
 
 /*******************************************************
- * 21. Graceful Restart
+ * 21. GRACEFUL RESTART
  *******************************************************/
 
-async function gracefulRestart(
+function gracefulRestart(
   reason
 ) {
 
@@ -1897,27 +1897,30 @@ async function gracefulRestart(
   }
 
 
-  setTimeout(
+  /*
+   * 非 0 exit：
+   * 讓 Render 判斷 process 已失敗，
+   * 再依服務策略重新啟動。
+   */
 
+  setTimeout(
     () => {
 
       process.exit(1);
 
     },
-
     1500
-
   );
 
 }
 
 
 /*******************************************************
- * 22. Login
+ * 22. LOGIN
  *******************************************************/
 
 console.log(
-  '[BOOT] 26 GROUP ATTENDANCE V2.3.2 STABLE'
+  '[BOOT] 26 GROUP ATTENDANCE V2.4 STABLE'
 );
 
 
