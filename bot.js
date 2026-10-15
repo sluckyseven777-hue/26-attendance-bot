@@ -1071,12 +1071,9 @@ async function checkOverdue() {
     console.error(
       '[OVERDUE ERROR]',
 
-      error.name ===
-        'AbortError'
-
-        ? 'Google API timeout'
-
-        : error.message
+   error.name === 'AbortError'
+  ? '⏳ Attendance Pending Verification｜打卡狀態待確認\n\nGoogle API 回應逾時，記錄可能已成功。\n請勿立即重複打卡，請聯絡管理員確認。\n\nGoogle API timed out. Your attendance may already be recorded. Please confirm before trying again.'
+  : error.message
     );
 
 
@@ -1764,26 +1761,16 @@ client.on(
 
 /*******************************************************
  * 17. OVERDUE MONITOR
+ * Check every 120 seconds
  *******************************************************/
 
-setInterval(
+setInterval(async () => {
 
-  async () => {
+  if (client.isReady()) {
+    await checkOverdue();
+  }
 
-    if (
-      client.isReady()
-    ) {
-
-      await checkOverdue();
-
-    }
-
-  },
-
-  60 * 1000
-
-);
-
+}, 120 * 1000);
 
 /*******************************************************
  * 18. GATEWAY WATCHDOG
